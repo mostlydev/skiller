@@ -74,6 +74,9 @@ hybrid (two code paths + two drifting agent tables).
   foreign content.
 - Two target modes: **named harness targets** (autodetected) and **explicit
   `--target-dir` runtime profiles** (for materialized containers).
+- Install a skill from **any source** — local dir, Git/GitHub URL, web `SKILL.md`, or
+  archive — with recorded provenance (§6.9) so `update` can re-fetch and refresh it later.
+  **No central source registry**: provenance is per-install, not a global marketplace.
 - `--json` dry-run (`plan`) for every mutating command.
 - Self-update + easy bootstrap.
 
@@ -96,6 +99,7 @@ skiller/                 (new repo)
 ├── pkg/                     library core — the contract for Go consumers
 │   ├── registry/            embedded harness registry (go:embed data + typed loader)
 │   ├── manifest/            TOML manifest parse/validate
+│   ├── source/              resolve a SourceSpec -> SourceSnapshot (fetchers: file/git/http)
 │   ├── observe/             impure FS scan -> WorldState (ownership-class + digest per root)
 │   ├── plan/                pure: (manifest, registry, WorldState, opts) -> Plan{actions[]}
 │   ├── install/             apply Plan: link/copy, atomic, idempotent, marker write
@@ -105,7 +109,9 @@ skiller/                 (new repo)
 │   └── selfupdate/          version check + update
 ├── cmd/skiller/         thin CLI over pkg/ (cobra/std flag)
 ├── internal/                fsutil (atomic rename, symlink+fallback), digest, lock
-├── data/harnesses.toml      embedded registry (single source of truth)
+├── data/harnesses.toml      embedded harness registry (single source of truth)
+├── data/markers.toml        known ownership markers: ours-legacy + foreign (§6.7)
+├── data/sources.toml        host shorthands / source detectors (§6.9)
 └── .goreleaser.yaml         multi-platform static builds + checksums
 ```
 
@@ -116,8 +122,13 @@ skiller/                 (new repo)
   conflict detection and the whole decision table (§6.7) are golden-/table-testable. This
   is the separation that made talking-stick's `planSkillInstall` reviewable, taken one
   step further: even the filesystem reads are lifted out of the planner.
+- **`pkg/source` resolves first.** A `SourceSpec` (local path, Git/GitHub, web file, or
+  archive) is normalized and fetched into a `SourceSnapshot` (§6.9) before anything else.
+  Observe and plan consume snapshots, never raw URLs, so source fetching is the one
+  network layer and stays cleanly outside the pure planner.
 - **`pkg/install` applies** a `Plan` and is the only writer. Idempotence and atomicity
-  live here. Observe (read) and apply (write) are the sole impure layers.
+  live here. Resolve (fetch), observe (read), and apply (write) are the impure layers;
+  `pkg/plan` stays pure.
 - CLI is a thin shell: parse args → build options → call `pkg`. Go tools can skip the
   CLI and call `pkg` directly.
 
@@ -223,9 +234,11 @@ default_mode = "link"          # link | copy
 name = "talking-stick"
 canonical_id = "mostlydev:talking-stick"   # optional stable owner:name identity
 install_slug = "talking-stick"             # harness-visible directory/effective name
-source = "./skills/talking-stick"
+source = "./skills/talking-stick"          # a SourceSpec (§6.9): local path, git, or web URL
 targets = ["agents", "claude-code"]   # agents == canonical shared ~/.agents/skills
 mode = "link"
+# A remote skill is just a different source spec — manifest shape is unchanged:
+#   source = "github.com/acme/skills//debugging?ref=v1.2.0"   # repo // subdir ? ref
 
 [[extras]]                     # generic file placement for tool-specific extras
 id = "grok-session-hook"
@@ -238,7 +251,9 @@ owned_marker = true
 
 If `canonical_id` is omitted, it is derived as `<namespace>:<name>`. Namespace default
 order: CLI `--namespace`, env `SKILLER_NAMESPACE`, manifest `namespace`, local
-config default, then `owner`. `install_slug` defaults to `name`.
+config default, then `owner`. `install_slug` defaults to `name`. The `source` field is a
+**SourceSpec** (§6.9): a local path today, or a `git`/GitHub/web/archive spec — the
+manifest format does not change when a tool ships a remote-sourced skill.
 
 `[[extras]]` keeps tool-specific *data* (talking-stick's Grok hook) in the generic
 installer while tool-specific *logic* (instructions-file harness extraction, MCP
@@ -327,8 +342,10 @@ The state file should stay small and human-inspectable: a single JSON file behin
 event stream:
 
 ```text
-sources(id, owner, namespace, package_ref, version, source_uri, source_realpath,
-        source_digest, discovered_at, last_seen_at)
+sources(id, owner, namespace, package_ref, version,
+        source_kind, original_spec, canonical_uri, source_key, subdir,
+        pinned_ref, resolved_revision, local_cache_path,
+        source_realpath, source_digest, fetched_at, discovered_at, last_seen_at)
 skills(id, canonical_id, namespace, name, install_slug, frontmatter_name,
        source_id, description, created_at, updated_at)
 installs(id, skill_id, target_kind, target_id, target_path, mode, scope,
@@ -473,12 +490,93 @@ Conflict resolution modes:
 - Resolved decisions are written to the state ledger with the selected resolution and
   target paths, so later `status` can explain why a shape exists.
 
+### 6.9 Source resolution & provenance
+
+A skill can come from anywhere: a local directory, a Git/GitHub repo, a raw web
+`SKILL.md`, or an archive. `skiller install <spec>` should "just work" on a pasted URL —
+fetch the skill, install it, and remember where it came from so a later `update` can
+refresh it — **without any central source registry**. The user-facing contract is a
+normalized **SourceSpec**, modeled on the well-trodden Terraform / `go-getter` source
+grammar but owned by us (no library is part of the contract).
+
+**SourceSpec grammar.** One string, auto-detected, with explicit overrides for
+robustness:
+
+- `./rel`, `/abs`, `file::<path>` — local directory (the default kind).
+- `github.com/org/repo`, `org/repo`, `git::https://host/repo.git`, `git@host:org/repo`
+  — Git. A host-normalizer maps GitHub/GitLab web URLs (`/tree/<ref>/<path>` or
+  `/blob/<ref>/<file>`) to repo + ref + subdir/file.
+- `https://host/path/SKILL.md` — a single web file (`http-file`).
+- `https://host/path/skill.tar.gz` / `.zip` — a web `archive`.
+- Add-ons: `//subdir` selects a skill inside a repo; `?ref=<tag|branch|sha>` pins a
+  version; `?checksum=<algo:hex>` pins content.
+
+A forced scheme (`git::`, `http::`, `file::`) always wins over detection. **Traverse-up is
+bounded to known hosts**: GitHub/GitLab URLs normalize to repo+ref+subdir; an arbitrary
+HTML URL is never guessed into a repo root — it is treated as `http-file` or `archive`
+unless a host-normalizer recognizes it. If a spec like `org/repo` also exists as a local
+path, the local path wins; use a forced scheme or full Git URL for the remote shorthand.
+
+**Resolution stage.** `pkg/source` turns a spec into a `SourceSnapshot` *before*
+observe/plan/apply:
+
+```text
+SourceSnapshot{
+  source_kind,        // file | git | http-file | http-archive | <future>
+  original_spec,      // verbatim, for UX + audit
+  canonical_uri,      // normalized identity, for dedupe + update
+  source_key,         // stable hash of canonical origin + subdir + requested ref selector
+  subdir, pinned_ref, // selection + requested pin
+  resolved_revision,  // git SHA, or http ETag/Last-Modified + content digest
+  local_cache_path,   // materialized working copy
+  source_digest, fetched_at,
+}
+```
+
+The planner and apply consume snapshots, never raw URLs, so apply stays source-agnostic.
+The operator's "hash it or store it verbatim" is answered by keeping **all three**
+identity layers: `original_spec` (human/audit), `canonical_uri` (dedupe), and `source_key`
+(the stable per-source key, used as the cache/ledger key across versions). `source_key`
+excludes `resolved_revision` so a floating branch can update in place, but it includes the
+requested ref selector when one was supplied, so two branches of the same repo/subdir do
+not collide.
+
+**Fetchers are typed; detectors are data.** Each `source_kind` is a typed `Fetcher`
+(`file`, `git`, `http-file`, `http-archive`) because each has distinct update and security
+semantics. Host shorthands / detectors live in an extensible `data/sources.toml` (beside
+`harnesses.toml` and `markers.toml`), so recognizing a new host is a data change;
+supporting a genuinely new *kind* is a new `Fetcher`. Anything without a fetcher is an
+explicit "unsupported source" error, never a guess.
+
+**Materialization & install mode.** Remote sources fetch into a managed source store keyed
+by `source_key`; the normal link/copy install then proceeds from there. Remote installs
+**default to copy** (a symlink into a re-fetchable cache is fragile); `link` is opt-in,
+warns, and points at a stable per-source materialized dir that `update` refreshes in
+place. Local-dir sources keep `link` as the default.
+
+**Update.** `skiller update [name|--all]` (and `skiller sources refresh`) re-resolves the
+recorded source, fetches, and compares `resolved_revision`/digest. A **pinned** ref
+(tag/sha/checksum) is frozen until `--latest` or an explicit re-pin; a **floating** ref
+(branch / default branch / a web URL) refreshes to the newest revision. Any change then
+flows through the **same** conflict/ownership machinery (§6.5–§6.8) — a locally modified
+copy is preserved unless `--force`. Apply is never special-cased for remote sources.
+
+**Multi-skill & security.** If a resolved source contains one `SKILL.md`, install it; if
+it contains several (`*/SKILL.md`), the plan lists all but requires `--all` or
+`--skill/--name` — no surprise bulk install from a repo root. Private sources use the
+host's **ambient** git credentials / SSH / `.netrc`; skiller stores no credentials in v1.
+Archives extract with a zip-slip path-traversal guard and size/file-count limits. Because
+a fetched skill can carry scripts, the first ad-hoc install of an untrusted remote source
+asks for confirmation unless `--yes` or a trusted-source policy applies.
+
 ## 7. CLI surface
 
 ```
-skiller plan      [--manifest m.toml | --source … --name …] [--target … | --target-dir …] [--namespace N] --json
-skiller install   …same selectors…  [--mode link|copy] [--owner X] [--scope host|runtime] [--namespace N] [--yes] [--json]
-skiller status    [--manifest …]    [--namespace N] --json          # what's installed, drift, ownership
+skiller plan      [--manifest m.toml | <source-spec> --name …] [--target … | --target-dir …] [--namespace N] --json
+skiller install   [<source-spec> | --manifest …] [--ref R] [--subdir S] [--checksum C] [--skill N|--all] [--mode link|copy] [--owner X] [--scope host|runtime] [--namespace N] [--yes] [--json]
+skiller update    [name|--all] [--latest] [--json]                  # re-resolve recorded sources; refresh if changed
+skiller status    [--manifest …]    [--namespace N] --json          # what's installed, drift, ownership, provenance
+skiller sources   list|refresh --json                               # recorded source provenance; refresh = re-resolve+fetch
 skiller sync      [--manifest …]    [--namespace N] [--json]         # re-link, refresh digests, prune stale managed installs
 skiller uninstall [--manifest …] [--target … | --target-dir …] [--shared] [--all] [--force] [--json]
 skiller registry  --json
@@ -493,7 +591,11 @@ Global flags: `--state-dir DIR`, `--home DIR`, `--project DIR`, `--namespace N`,
 - Every mutating command supports `plan`/`--dry-run` returning the same JSON `Plan`.
 - `uninstall` honors talking-stick's Option-B rule: single-target uninstall leaves the
   shared `~/.agents/skills` and prints a hint; shared removed only by `--shared`/`--all`.
-- `install` updates selected desired skills only; it does not broadly prune.
+- `install` accepts either a manifest or a single `<source-spec>` (§6.9) — the
+  "paste a URL" path — and updates only the selected skills; it does not broadly prune.
+- `update` / `sources refresh` re-resolve recorded provenance and re-install only when a
+  source's resolved revision changed, through the normal conflict/ownership rules; pinned
+  refs need `--latest`. `sources list` reports where each install came from.
 - `sync --manifest` updates desired skills and prunes marker-owned skills no longer
   declared by that manifest, preserving foreign and locally modified targets.
 - `cleanup-duplicates` should be a distinct command or sub-plan used by integrations to
@@ -608,6 +710,10 @@ Deliverables:
   embedded harness registry fields.
 - Finalize the persisted state schema, ownership taxonomy, and conflict-resolution
   policy names.
+- Finalize the **SourceSpec** grammar and **SourceSnapshot** / provenance fields
+  (`source_kind`, `original_spec`, `canonical_uri`, `source_key`, `resolved_revision`, …)
+  so the ledger and planner carry provenance from day one (§6.9), before remote fetchers
+  ship.
 - Commit fixture examples for one bundled self-skill, one manifest-declared skill, one
   extra file, one runtime target-dir install, one stale copy, one modified copy, and
   one namespace collision.
@@ -625,8 +731,9 @@ Gate:
 
 Build:
 
-- `pkg/registry`, `pkg/manifest`, `pkg/state`, `pkg/observe`, `pkg/status`, and pure
-  `pkg/plan`.
+- `pkg/registry`, `pkg/manifest`, `pkg/state`, `pkg/observe`, `pkg/status`, pure
+  `pkg/plan`, and `pkg/source` with the local `file` resolver (SourceSnapshot plumbing so
+  the planner consumes snapshots, not paths/URLs, from day one).
 - CLI: `skiller plan --json`, `skiller registry --json`, `skiller status --json`, and
   `skiller conflicts list --json` in read/plan mode.
 - Stable lock ids and target paths in the plan output.
@@ -650,6 +757,33 @@ Gate:
 - No mutating command exists yet. All adopters can compare desired behavior by diffing
   `skiller plan --json` against their current dry-run output, including existing direct
   CLI installs that should be reused instead of duplicated.
+
+### 11.3a Milestone 1b - source fetchers & provenance (resolve, no target writes yet)
+
+Build:
+
+- Typed `Fetcher`s in `pkg/source`: `git` (via the host's `git`/SSH so auth is ambient),
+  `http-file`, and `http-archive` (zip-slip guard + size/file-count limits).
+- `data/sources.toml` host shorthands / detectors; GitHub/GitLab `/tree|/blob` web-URL
+  normalizers; `//subdir`, `?ref=`, `?checksum=` grammar.
+- Materialized source store keyed by `source_key`; full provenance recorded in the ledger.
+- `skiller plan <source-spec> --json` resolves + fetches and shows the would-be install;
+  `skiller sources list --json`; multi-skill selectors (`--all`/`--skill`). Still **no
+  skill target writes** — cache/state writes are allowed, consistent with the pre-M2
+  target-safety rule.
+
+Tests:
+
+- Resolve/normalize: detection vs forced scheme, GitHub/GitLab web URL -> repo+ref+subdir,
+  `source_key` stability across revisions, ambiguous-spec errors.
+- Fetch against fixtures (no live network): git ref pin/float, http-file ETag, archive
+  extraction with path-traversal + size guards.
+
+Gate:
+
+- `skiller plan <spec> --json` resolves local, git, and web sources, fetches into the
+  store, and records full provenance. End-to-end `install <spec>` and `update` complete
+  once the M2 writer lands.
 
 ### 11.4 Milestone 2 - writer, state, and conformance
 
@@ -834,7 +968,7 @@ Gate:
 - Add content-rewriting overlay mode only if a real cross-namespace frontmatter
   collision requires it.
 
-## 12. Codex review resolutions
+## 12. Review resolutions (decision log)
 
 - **Link fallback:** host named targets default link and may auto-fallback to copy when
   symlink creation fails; the result must record that fallback. Runtime target-dir
@@ -886,6 +1020,27 @@ Gate:
   can replace its own pre-skiller installs.
 - **Prompt fallback:** `--on-conflict prompt` with no TTY falls back to `block` + report;
   it never hangs or guesses a default.
+
+**Convergence review 3 (source resolution) resolutions:**
+
+- **Install from anywhere, no source registry:** a normalized `SourceSpec`
+  (Terraform/`go-getter` grammar, but our contract — not the library) covers local / git
+  / GitHub / web file / archive, with `//subdir` + `?ref=`. Resolution is a
+  `pkg/source` stage producing a `SourceSnapshot` before observe/plan/apply.
+- **Provenance, three layers:** persist `original_spec` (verbatim/audit), `canonical_uri`
+  (dedupe/update), and `source_key` (stable hash of canonical origin + subdir + requested
+  ref selector, excluding resolved revision), plus `resolved_revision` for update checks.
+  Source identity stays separate from skill identity.
+- **Bounded traverse-up:** only known-host normalizers (GitHub/GitLab) map deep URLs to
+  repo+ref+subdir; arbitrary HTML is never guessed into a repo root.
+- **Detectors = data, fetchers = typed code:** host shorthands live in `data/sources.toml`;
+  each `source_kind` is a typed `Fetcher` with its own security/update semantics.
+- **Remote = copy by default; updates reuse the machinery:** `update` / `sources refresh`
+  re-resolve and re-install only on change; pinned refs need `--latest`; apply is never
+  special-cased for remote. Ambient git/SSH/netrc auth; zip-slip + size guards;
+  first-install trust confirmation unless `--yes`.
+- **Schema day-one, fetchers phased:** SourceSpec + provenance fields land in M0/M1; remote
+  fetchers ship in M1b, before the writer.
 
 ## 13. Naming (decided)
 
