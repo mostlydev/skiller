@@ -496,7 +496,7 @@ positioning), `skilljack` (olaservo/skilljack-mcp), `skillpm`, `skillkit`, `skil
 coined name sidesteps the lot. `skiller` follows the canonical software-tool naming
 convention — the agent-noun `-er`/`-or` suffix of compiler, linker, loader, assembler,
 debugger, profiler, builder, **installer** — so it reads as a real tool: "the thing that
-skills your agents." It is unclaimed in the agent-skills space, short, brandable, and
+skills your agents." It is unclaimed in the Agent Skills ecosystem, short, brandable, and
 fits the sibling menagerie (clawdapus, gnit, microclaw).
 
 Runners-up: `skillwire` (Shadowrun "skillwires" literally install skill chips — clean
