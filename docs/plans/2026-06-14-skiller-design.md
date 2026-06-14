@@ -68,8 +68,8 @@ hybrid (two code paths + two drifting agent tables).
 
 **Goals**
 - One binary + one Go library, one embedded harness registry, one manifest format.
-- A local install database that records provenance, namespaces, targets, digests, and
-  conflict decisions across all sources this tool has installed.
+- A persistent local state ledger that records observed installs, provenance, conflicts,
+  and remembered conflict resolutions across skiller and other detected installers.
 - Reliable, **idempotent**, **atomic** installs; safe uninstall that never deletes
   foreign content.
 - Two target modes: **named harness targets** (autodetected) and **explicit
@@ -84,6 +84,9 @@ hybrid (two code paths + two drifting agent tables).
 - No skill *authoring*/registry/discovery marketplace (that's Vercel's `skills find`).
 - No project-committed scope work beyond what the manifest needs (global scope first;
   `project_dir` is in the registry data but lower priority).
+- No central database as the only authority for destructive operations. The ledger is
+  persistent memory and conflict UX; target-local markers and realpaths remain the
+  safety proof for writes and deletes.
 
 ## 5. Architecture
 
@@ -93,10 +96,12 @@ skiller/                 (new repo)
 ├── pkg/                     library core — the contract for Go consumers
 │   ├── registry/            embedded harness registry (go:embed data + typed loader)
 │   ├── manifest/            TOML manifest parse/validate
-│   ├── plan/                resolve manifest+registry+mode -> install Plan (pure, testable)
+│   ├── observe/             impure FS scan -> WorldState (ownership-class + digest per root)
+│   ├── plan/                pure: (manifest, registry, WorldState, opts) -> Plan{actions[]}
 │   ├── install/             apply Plan: link/copy, atomic, idempotent, marker write
 │   ├── prune/               duplicate cleanup + safe uninstall (marker/realpath gated)
-│   ├── state/               local install DB: provenance, namespaces, conflicts
+│   ├── state/               JSON ledger: observed installs, conflicts, remembered decisions
+│   ├── status/              derived inspection/index views over state + target roots
 │   └── selfupdate/          version check + update
 ├── cmd/skiller/         thin CLI over pkg/ (cobra/std flag)
 ├── internal/                fsutil (atomic rename, symlink+fallback), digest, lock
@@ -104,11 +109,15 @@ skiller/                 (new repo)
 └── .goreleaser.yaml         multi-platform static builds + checksums
 ```
 
-- **`pkg/plan` is pure**: `(manifest, registry, options) -> Plan{actions[]}` with no
-  filesystem writes. This is what makes dry-run trivial and the logic unit-testable —
-  the same separation that made talking-stick's `planSkillInstall` reviewable.
+- **Observe / plan / apply is the spine.** `pkg/observe` performs the only reads that
+  feed a decision: it scans each candidate root into a `WorldState` snapshot
+  (ownership-class + digest per path). `pkg/plan` is then **pure** —
+  `(manifest, registry, WorldState, options) -> Plan{actions[]}` with no I/O at all — so
+  conflict detection and the whole decision table (§6.7) are golden-/table-testable. This
+  is the separation that made talking-stick's `planSkillInstall` reviewable, taken one
+  step further: even the filesystem reads are lifted out of the planner.
 - **`pkg/install` applies** a `Plan` and is the only writer. Idempotence and atomicity
-  live here.
+  live here. Observe (read) and apply (write) are the sole impure layers.
 - CLI is a thin shell: parse args → build options → call `pkg`. Go tools can skip the
   CLI and call `pkg` directly.
 
@@ -176,6 +185,29 @@ the adopting tool's transition code, not in this shared core.
    at the same location. `--mode link` is allowed only as an explicit opt-in with a
    warning.
 
+   Before writing any named target, the planner surveys every root read by the in-scope
+   harnesses — each selected harness's shared and proprietary roots — for the same
+   effective skill name, using the registry plus the state ledger's remembered locations
+   (not literally every root on disk; unrelated harnesses are not scanned). This applies
+   even when a target is foreign or unmarked: if a direct CLI install already satisfies
+   the desired skill for a reader, `skiller` must not create a duplicate in another root
+   that same reader also loads, just because the existing directory lacks a skiller marker.
+
+   Satisfaction is per reader, not just per path. For shared-reading harnesses, the
+   planner also inspects proprietary duplicate roots that the selected readers may load
+   (`~/.codex/skills`, `~/.grok/skills`, old OpenCode roots, etc.). A foreign matching
+   skill in a proprietary root can satisfy that one reader, but it does not satisfy the
+   whole shared `agents` group. Installing the shared copy anyway may create a duplicate
+   for that reader, so the plan must surface a partial-satisfaction/conflict decision
+   instead of blindly writing `~/.agents/skills/<skill>`.
+
+   Boundary: runtime target-dir mode installs Agent Skill directories. It should not
+   absorb every runtime file that a tool happens to call a "skill". In clawdapus, flat
+   service-surface markdown files, generated `CLAWDAPUS.md`, `claw.describe`, and
+   `claw.skill.emit` projection remain clawdapus responsibilities in v1. `skiller`
+   handles bundled CLI/self skills and any runtime target whose layout is truly
+   `skills/<name>/SKILL.md` or an equivalent driver-declared Agent Skill layout.
+
 ### 6.3 Skill manifest (TOML)
 
 A consuming tool ships a manifest; the installer reads it. (Drafted by Codex.)
@@ -183,7 +215,7 @@ A consuming tool ships a manifest; the installer reads it. (Drafted by Codex.)
 ```toml
 schema = "skiller-install.v1"
 owner = "talking-stick"       # installer owner / package owner
-namespace = "mostlydev"       # canonical namespace for conflict tracking
+namespace = "mostlydev"       # canonical provenance namespace
 version = "0.4.14"
 default_mode = "link"          # link | copy
 
@@ -213,7 +245,7 @@ installer while tool-specific *logic* (instructions-file harness extraction, MCP
 cleanup) stays in the owning tool. Directory extras can use the same in-directory
 marker as skill copies. Single-file extras need a sidecar marker next to the target
 (for example `talking-stick-session.json.skiller-install.json`) so uninstall and
-sync remain safe without depending on a global database.
+sync remain safe without depending on the state ledger alone.
 
 ### 6.4 Install modes
 
@@ -244,6 +276,11 @@ sync remain safe without depending on a global database.
 - **Conservative delete**: remove a copy only if marker `owner` matches **and** the
   current digest still equals `installed_digest_at_install`, unless `--force` was
   passed. Never touch dirs we don't own.
+- **Foreign satisfaction**: if a foreign or unmarked target already exists at the
+  desired effective name, compute its digest before deciding it is a conflict. When the
+  current target digest equals the desired source digest, the plan records
+  `satisfied-by-foreign`, performs no write, and does not add
+  a marker to the foreign directory.
 - **Duplicate cleanup**: port talking-stick's symlink-only prune — remove only symlinks
   that resolve to the managed source; preserve foreign symlinks and unmanaged copies.
 - **Idempotence**: re-running install with the same inputs is a no-op (quiet), matching
@@ -271,48 +308,124 @@ This is not just a port of any one tool's current installer:
   `canonical_id` such as `org:skill-name` while the installed directory remains the
   harness-visible slug.
 
-### 6.7 Local install database
+### 6.7 Persistent state ledger
 
-Target markers answer "is this path safe to touch?" The local DB answers the broader
-questions markers cannot answer:
+V1 keeps a persistent local state ledger, but the ledger is not the only authority. It
+is a memory and conflict-resolution layer over target-local facts:
 
-- Which sources/packages installed a skill with this name?
-- Which target paths belong to the same canonical skill?
-- Does a new install collide with an existing install from another namespace?
-- Which installed entries are duplicates, stale, locally modified, or orphaned?
-- What legacy marker/adoption rule created this entry?
+- A symlink is safe to mutate when it resolves to an expected managed source.
+- A copy is safe to mutate when its marker matches the owner/canonical ID and its digest
+  state allows the requested operation.
+- A delete still requires target-local proof, even if the ledger says the target was
+  once installed by skiller.
+- If the ledger is missing or corrupt, `status` and `state repair` rebuild as much as
+  possible from manifests, registry roots, markers, legacy ownership adapters, and
+  filesystem inspection.
 
-The DB is a local ledger, not the only authority. Deletes still require a target marker
-or symlink realpath proof; if the DB is missing or corrupt, `status --repair-db` can
-rebuild from markers and known target roots.
-
-Suggested schema:
+The state file should stay small and human-inspectable: a single JSON file behind
+`pkg/state`, not SQLite in v1. It records the latest known view, not an append-only
+event stream:
 
 ```text
 sources(id, owner, namespace, package_ref, version, source_uri, source_realpath,
-        source_digest, discovered_at)
+        source_digest, discovered_at, last_seen_at)
 skills(id, canonical_id, namespace, name, install_slug, frontmatter_name,
        source_id, description, created_at, updated_at)
 installs(id, skill_id, target_kind, target_id, target_path, mode, scope,
          marker_path, installed_digest_at_install, source_digest_at_install,
-         installed_at, updated_at, status)
-extras(id, source_id, extra_id, target_path, mode, marker_path, installed_at)
-conflicts(id, target_kind, target_id, effective_name, canonical_ids, resolution,
-          created_at, resolved_at)
+         status, legacy_adapter, installed_at, updated_at, last_seen_at)
+extras(id, source_id, extra_id, target_path, mode, marker_path, installed_at,
+       updated_at, last_seen_at)
+conflicts(id, target_kind, target_id, effective_name, existing_canonical_id,
+          desired_canonical_id, status, resolution, resolved_at, updated_at)
 ```
-
-Backend (v1, decided): a **single JSON ledger file** behind `pkg/state` — not SQLite.
-The dataset is tiny (a handful of skills × targets per machine), the ledger must already
-be rebuildable from on-disk markers, and a JSON file keeps the binary trivially static
-(no CGO `mattn/go-sqlite3`, no `modernc` driver) and human-inspectable. Revisit an
-embedded SQL store only if scale ever demands it. The CLI, not direct ledger access, is
-the public interface: `skiller status --json`, `skiller registry --json`, and a future
-`skiller db doctor|repair`.
 
 State location default order: CLI `--state-dir`, env `SKILLER_STATE_DIR`, platform
 state dir (`$XDG_STATE_HOME/skiller`, macOS Application Support, Windows
 LocalAppData), then a documented fallback under the user's home. Tests must always use
 an explicit temp state dir.
+
+`skiller status --json` merges the ledger with live inspection. Live filesystem facts
+win over stale state; stale state is reported as `orphaned` or `not-seen`, not silently
+trusted. Mutating commands update the ledger after successful application and record
+blocked conflicts before returning.
+
+The first scan classifies every target with an explicit ownership taxonomy:
+
+- `ours-symlink`: symlink realpath points to the desired skiller-managed source.
+- `ours-copy`: copy marker is a skiller marker for the same owner/canonical ID.
+- `ours-legacy`: a configured legacy adapter recognizes a prior install from an
+  adopting tool, such as `.gnit-skill-managed` or an our-ai marker.
+- `foreign-known`: a recognized non-skiller installer marker or marketplace/direct-CLI
+  install owns the target.
+- `foreign-unmanaged`: a target exists but has no recognized ownership proof.
+- `satisfied-by-foreign`: an existing local, direct-CLI, marketplace, or otherwise
+  foreign install has the desired effective name and matching digest, so it satisfies
+  the request without mutation.
+- `partially-satisfied`: one or more selected readers are satisfied by an existing
+  foreign install, but the requested target group is not fully satisfied without
+  creating a duplicate for those readers.
+- `absent`: no target exists.
+
+This taxonomy is the coexistence spine. A direct CLI install that already put the same
+skill in the desired target should become `satisfied-by-foreign` or an explicit
+ledger-only `adopt-existing` resolution, not a duplicate directory under another slug.
+
+**Recognizing ownership is data-driven.** What separates `ours-legacy` from
+`foreign-known` is not a hardcoded branch; it is an embedded, extensible marker table
+(`data/markers.toml`) that sits beside the harness registry. Each entry is a
+`{owner_label, marker_file | ownership_test, class}` where `class ∈ {ours-legacy,
+foreign}`:
+
+```toml
+# data/markers.toml
+[[markers]]
+owner_label = "gnit"
+marker_file = ".gnit-skill-managed"   # adopting tool's prior install -> adoptable as ours
+class = "ours-legacy"
+
+[[markers]]
+owner_label = "our-ai"
+marker_file = ".our-managed.json"
+class = "ours-legacy"
+
+[[markers]]
+owner_label = "vercel-skills"
+ownership_test = "lockfile"            # owners whose proof is not an in-dir file
+class = "foreign"                      # coexist; never mutate without resolution
+```
+
+Owners whose proof is not a file inside the skill dir (e.g. clawdapus' global
+`~/.claw/skill-installed` plus raw `SKILL.md` copies, or a marketplace lockfile) supply a
+named `ownership_test` predicate instead of a `marker_file`. Adding "recognize tool X /
+marketplace Y" is then a **data change, not new planner code** — the same data-driven
+extensibility as the harness registry. `ours-legacy` entries make a tool's own
+pre-skiller installs adoptable; `foreign` entries mark installs we coexist with and never
+mutate without explicit conflict resolution. The legacy ownership adapters of §9 are just
+the `ours-legacy` rows of this one table.
+
+Foreign occupant decision table:
+
+| Existing target | Desired digest match? | Default plan |
+| --- | --- | --- |
+| absent (no existing target) | n/a | install (link or copy per mode) |
+| owned by skiller/current source | yes | no-op |
+| owned by skiller/current source | no, target unmodified | refresh/sync |
+| owned by skiller/current source | no, target modified | preserve/block unless forced |
+| `ours-legacy` (adopting tool's own prior install) | yes | adopt as ours; no-op or marker upgrade |
+| `ours-legacy` | no | adopt, then refresh/replace-as-owned (its lineage is ours) |
+| foreign known or unmanaged | yes | `satisfied-by-foreign`, no write, ledger record only |
+| foreign known or unmanaged | no | conflict, no write until resolved |
+| foreign match in a selected reader's proprietary duplicate root | yes | `partially-satisfied`, no shared write until resolved |
+
+`adopt-existing` never writes a marker into a foreign target in v1. It records that the
+foreign install satisfies the desired skill so later runs remain non-destructive and do
+not create duplicates. Converting a foreign install into a skiller-owned copy is a
+separate explicit replacement action. One trade-off `status` must surface, never hide:
+`satisfied-by-foreign` yields update-propagation to the foreign owner — unlike an
+`ours-symlink` install, a later source bump does not flow through until the user replaces
+the foreign copy — so the two are reported as distinct states, never collapsed into a
+single "installed".
 
 ### 6.8 Namespaces and conflicts
 
@@ -323,15 +436,14 @@ four tools.
 
 Namespace rules:
 
-- Canonical identity is `namespace:name` and is stored in the manifest, marker, and DB.
+- Canonical identity is `namespace:name` and is stored in the manifest, marker, state
+  ledger, and JSON plan/status output.
 - The namespace is configurable by CLI arg, env (`SKILLER_NAMESPACE`), manifest, or
   local config default.
 - The harness-visible name is still flat. Namespace alone does **not** prevent a
   conflict if two sources both expose `name: debugging`.
 - By default, installing a different canonical ID with the same effective
-  harness-visible name in the same target is **blocked** and recorded as a conflict.
-- `--allow-conflict` may install only when the harness has deterministic shadowing and
-  the plan reports exactly which entry wins.
+  harness-visible name in the same target is **blocked** and recorded in state.
 - `--install-slug` / manifest `install_slug` can choose a distinct directory name.
   If the source `SKILL.md` frontmatter name would still collide, **v1 refuses and
   reports** the conflict (no silent rewrite). A copy/overlay mode that writes an
@@ -340,6 +452,26 @@ Namespace rules:
   rare cross-namespace name collisions our own four-tool fleet will not hit.
 
 No silent source mutation. Symlink installs cannot rewrite frontmatter.
+
+Conflict resolution modes:
+
+- Default non-interactive mode is `--on-conflict block`: record the conflict and return
+  a plan/status result explaining the safe choices.
+- `--interactive` or `--on-conflict prompt` opens a TTY prompt when stdin/stdout are
+  interactive. Choices include use/adopt existing without mutation, keep existing and
+  skip, replace if owned, install under a new slug, force replace, or abort. Unsafe
+  choices require explicit confirmation. If `prompt` is requested but no TTY is attached
+  (CI, pipes), it does **not** hang or silently pick a default: it falls back to `block`
+  and reports the same safe choices for a follow-up non-interactive `--on-conflict` run.
+- Automatic modes are explicit args: `--on-conflict skip`,
+  `--on-conflict adopt-existing`, `--on-conflict replace-owned`,
+  `--on-conflict rename`, and `--on-conflict force-replace`. `rename` requires
+  `--install-slug` or a manifest-provided alternate; `force-replace` also requires
+  `--force`.
+- Renaming is explicit through `--install-slug` or manifest `install_slug`; the resolver
+  can suggest a slug but should not silently invent one.
+- Resolved decisions are written to the state ledger with the selected resolution and
+  target paths, so later `status` can explain why a shape exists.
 
 ## 7. CLI surface
 
@@ -350,12 +482,13 @@ skiller status    [--manifest …]    [--namespace N] --json          # what's i
 skiller sync      [--manifest …]    [--namespace N] [--json]         # re-link, refresh digests, prune stale managed installs
 skiller uninstall [--manifest …] [--target … | --target-dir …] [--shared] [--all] [--force] [--json]
 skiller registry  --json
-skiller db        doctor|repair      --json
+skiller conflicts list|resolve --json
+skiller state     doctor|repair --json
 skiller selfupdate [--check]
 ```
 
 Global flags: `--state-dir DIR`, `--home DIR`, `--project DIR`, `--namespace N`,
-`--json`.
+`--on-conflict MODE`, `--interactive`, `--json`.
 
 - Every mutating command supports `plan`/`--dry-run` returning the same JSON `Plan`.
 - `uninstall` honors talking-stick's Option-B rule: single-target uninstall leaves the
@@ -410,8 +543,9 @@ behavior:
   - our-ai: marker file `bundle.MarkerName`, JSON installer in `{our, our-ai}`, plus
     symlink realpath within managed source roots such as `~/.local/share/our*/skills`.
   - clawdapus: `~/.claw/skill-installed` plus raw `SKILL.md` copies.
-  The core should expose `legacy_ownership_predicates` / `{marker_filename,
-  ownership_test}` hooks rather than baking every old marker into the shared registry.
+  These adapters are not bespoke code per tool: they are the `ours-legacy` rows of the
+  data-driven `data/markers.toml` table (§6.7), the same mechanism that recognizes
+  `foreign` installs for coexistence. Adding or adopting a tool is a data change.
 - Gemini transition code stays outside the core. If `our-ai` still has old
   `gemini skills link` behavior at adoption time, replace it with Antigravity/`agents`
   or keep it as a short-lived tool-local migration path that never enters
@@ -426,28 +560,279 @@ behavior:
 - Idempotence, atomicity (crash-mid-install leaves no partial), link→copy fallback,
   runtime-copy default, conservative-delete, modified-copy preservation,
   dup-prune-preserves-foreign.
-- Local DB tests: conflict detection by namespace/name, DB rebuild from markers,
-  orphan detection, duplicate reporting, namespace default precedence, and
-  install-slug/frontmatter collision behavior.
+- State/status tests: conflict detection by namespace/name, conflict persistence,
+  interactive resolver simulation, automatic `--on-conflict` modes, state rebuild from
+  markers, orphan detection, duplicate reporting, namespace default precedence, legacy
+  marker recognition, and install-slug/frontmatter collision behavior.
 - Project/global scope tests: `--global` maps named `agents` to `~/.agents/skills`,
   `--project DIR` maps it to `DIR/.agents/skills`, and `--target-dir` bypasses both.
 - Concurrent-run tests: two installers targeting the same skill serialize on the same
   lock; two installers targeting disjoint roots do not unnecessarily block each other.
 - Conformance: replay talking-stick install scenarios and diff results.
 
-## 11. Phased plan
+## 11. Roadmap
 
-1. **M1 — core**: repo, `pkg/registry` + `data/harnesses.toml`, `pkg/manifest`,
-   `pkg/state`, `pkg/plan`, `plan --json`, `registry --json`, DB initialization and
-   dry-run conflict detection. No target writes yet.
-2. **M2 — install/uninstall**: `pkg/install` (link/copy, atomic, idempotent, marker),
-   `pkg/prune`, CLI `install`/`uninstall`/`status`/`sync`. Full tests.
-3. **M3 — distribution**: GoReleaser, selfupdate, installer script, bootstrap snippet.
-4. **M4 — adopt in talking-stick** behind parity tests; then our-ai, gnit, clawdapus
-   (runtime mode).
-5. **M5 (later)**: extension points proven by adding an agent via data-only change;
-   optional upstream contributions to Vercel (Antigravity, static binary, exported
-   registry).
+This roadmap is the convergence target for replacing built-in skill installers across
+talking-stick, our-ai, gnit, and clawdapus. The order is intentionally conservative:
+prove semantics once, keep adopters thin, and remove legacy code only after each tool
+has shipped through a compatibility window.
+
+### 11.1 Operating principles
+
+1. **One semantic core, thin adapters.** Each tool may keep its command names
+   (`tt install`, `our skills`, `gnit skills`, `claw skill install`), but install
+   planning, ownership checks, shared-target grouping, marker handling, copy/link
+   application, and target safety reporting belong in `skiller`.
+2. **Plan before apply.** Every adopting tool must be able to show the exact `skiller`
+   plan it will apply. A consumer-specific wrapper can change presentation, not the
+   underlying action graph.
+3. **Coexistence before convenience.** Existing local, marketplace, and direct-CLI
+   installs must be detected and either reused/adopted or blocked with a resolver
+   choice. Creating duplicate skill directories to avoid deciding is a failure.
+4. **Conformance before cutover.** talking-stick's current install tests are the
+   reference oracle because they encode the hardest shared/proprietary target behavior.
+   gnit and our-ai add legacy-marker and embedded-binary cases. clawdapus adds the
+   host/self-skill and runtime-target-dir cases.
+5. **Compatibility before deletion.** A tool-local installer is removed only after the
+   skiller path has shipped in that tool, passed fixture-home parity, and can adopt or
+   safely ignore previous installs.
+6. **No registry sprawl in v1.** The registry starts with the verified fleet only:
+   `agents`, `claude-code`, `codex`, `antigravity`, `grok`, and `opencode`. Runtime
+   directories are explicit target dirs, not fake host harnesses.
+
+### 11.2 Milestone 0 - lock the contract
+
+Deliverables:
+
+- Finalize the manifest schema, marker schema, JSON plan schema, status taxonomy, and
+  embedded harness registry fields.
+- Finalize the persisted state schema, ownership taxonomy, and conflict-resolution
+  policy names.
+- Commit fixture examples for one bundled self-skill, one manifest-declared skill, one
+  extra file, one runtime target-dir install, one stale copy, one modified copy, and
+  one namespace collision.
+- Add fixtures for direct/local installs that already occupy the desired target so day
+  one adopters can prove they do not create duplicates.
+- Define legacy ownership predicates as data/configurable adapters, not hardcoded
+  tool branches in `pkg/install`.
+
+Gate:
+
+- `skiller plan --json` can represent all four tools' current install intents without
+  writing files.
+
+### 11.3 Milestone 1 - pure planner, registry, and state reads
+
+Build:
+
+- `pkg/registry`, `pkg/manifest`, `pkg/state`, `pkg/observe`, `pkg/status`, and pure
+  `pkg/plan`.
+- CLI: `skiller plan --json`, `skiller registry --json`, `skiller status --json`, and
+  `skiller conflicts list --json` in read/plan mode.
+- Stable lock ids and target paths in the plan output.
+- Plan-time conflict detection is pure over an observed `WorldState` (the impure scan
+  lives in `pkg/observe`); `pkg/plan` does no I/O. No writes yet.
+
+Tests:
+
+- Fixture-home tests for target resolution, shared-target grouping, namespace collision
+  blocking, manifest default precedence, `install_slug`/frontmatter collisions, and
+  registry validation.
+- State read/rebuild tests for recognized foreign installs, legacy markers, direct CLI
+  installs, duplicate prevention, and stale ledger entries.
+- Digest-match tests proving unmarked direct CLI installs become
+  `satisfied-by-foreign` and do not receive skiller markers.
+- Golden JSON plans for talking-stick, our-ai self-skill, our-ai manifest skills, gnit,
+  and clawdapus host self-skill.
+
+Gate:
+
+- No mutating command exists yet. All adopters can compare desired behavior by diffing
+  `skiller plan --json` against their current dry-run output, including existing direct
+  CLI installs that should be reused instead of duplicated.
+
+### 11.4 Milestone 2 - writer, state, and conformance
+
+Build:
+
+- `pkg/install`, `pkg/prune`, `pkg/state` write/repair, `install`, `uninstall`,
+  `status`, `sync`, and `cleanup-duplicates`.
+- Atomic link/copy application, per-target locks, same-filesystem staging, ownership
+  markers, three-way copy digest handling, conservative delete, symlink realpath
+  ownership, and link-to-copy fallback.
+- Default `--on-conflict block` behavior that records conflicts in state and refuses to
+  mutate unsafe targets.
+- Legacy ownership adapters for:
+  - talking-stick bundled-source symlinks and old proprietary duplicate paths.
+  - gnit `.gnit-skill-managed` copies and symlinks to the managed source.
+  - our-ai `bundle.MarkerName` markers with installer `{our, our-ai}` and managed
+    source roots under `~/.local/share/our*`.
+  - clawdapus `~/.claw/skill-installed` as a migration signal for host self-skill
+    adoption only.
+
+Tests:
+
+- Replay talking-stick's install/uninstall/update-migration scenarios as a conformance
+  suite.
+- Add gnit parity fixtures for embedded managed source materialization and marker read
+  errors.
+- Add our-ai parity fixtures for canonical IDs, manifest install slugs, tool-provided
+  skills, and stale-vs-modified copies.
+- Add clawdapus fixtures for `~/.claude/skills/clawdapus-cli` and
+  `~/.agents/skills/clawdapus-cli` adoption without touching runtime surface markdown.
+- Add day-one coexistence fixtures: a skill installed directly by another CLI at the
+  desired target is reported as `satisfied-by-foreign` or blocked for explicit
+  adoption, never duplicated.
+- Prove adoption is ledger-only: `--on-conflict adopt-existing` does not mutate the
+  foreign target or write a skiller marker into it.
+
+Gate:
+
+- A full fixture run proves idempotence, no shared-target duplicates, no foreign
+  clobber, safe uninstall, and deterministic JSON status across all four tool shapes.
+
+### 11.5 Milestone 3 - conflict resolver UX
+
+Build:
+
+- Interactive resolver for TTY runs: use/adopt existing, keep/skip, replace owned,
+  rename with an explicit slug, force replace with confirmation, or abort.
+- Non-interactive policies: `block`, `skip`, `adopt-existing`, `replace-owned`,
+  `rename`, and `force-replace`.
+- `skiller conflicts resolve --json` for CI and wrapper tools that want to present
+  their own UI while still using skiller's resolver.
+
+Tests:
+
+- Prompt simulation tests for each interactive branch.
+- Non-interactive policy tests proving `our-cli`-style deployment can reuse local/direct
+  installs without creating duplicates.
+- State tests proving remembered resolutions show up in later `status --json`.
+
+Gate:
+
+- Conflict resolution is complete before any adopter makes skiller the default path.
+
+### 11.6 Milestone 4 - distribution and bootstrap
+
+Build:
+
+- GoReleaser static binaries, checksums, release notes, installer script, and
+  `skiller selfupdate`.
+- A tiny `ensure-skiller` bootstrap contract for Node, Go, and Rust consumers:
+  find existing binary, verify minimum version, download if allowed, otherwise print an
+  exact install command.
+- A Go library import path for our-ai and clawdapus, plus a stable subprocess JSON
+  contract for talking-stick and gnit.
+
+Gate:
+
+- Each consumer can run `skiller --version`, `registry --json`, and a dry-run plan in
+  CI without relying on Node, Python, npm, cargo, or a source checkout on the target
+  host.
+
+### 11.7 Milestone 5 - first adopters with fallback
+
+Adopt in two passes, because "reference behavior" and "lowest blast radius" are not the
+same thing.
+
+1. **talking-stick as the conformance oracle.** Keep the TypeScript path available
+   behind an emergency fallback while `tt install --print`, `tt install --all`,
+   `tt uninstall`, first-run skill sync, stale MCP cleanup, Grok hook extras, and
+   shared `.agents` behavior are replayed through `skiller`. The Grok hook remains an
+   `[[extras]]` file placement; instructions-file layering and MCP cleanup stay in
+   talking-stick.
+2. **gnit as the small subprocess pilot.** Replace `src/skills.rs` install planning and
+   writes with `skiller` subprocess calls while preserving the existing CLI surface:
+   `gnit skills install|uninstall|list`, `--all`, explicit harnesses, `--copy`,
+   `--link`, `--print`, and `--force`. The Rust code should keep only embedded skill
+   materialization, bootstrap, and output adaptation.
+
+Gate:
+
+- Both tools ship one release where the `skiller` path is default, legacy behavior can
+  still be reached for recovery, and fixture-home parity is documented in release
+  verification notes.
+
+### 11.8 Milestone 6 - our-ai cutover
+
+Adopt through the Go library unless subprocess parity proves simpler for release
+management.
+
+Scope:
+
+- `our skills self install|uninstall|status`, install-script self-skill setup,
+  `doctor --fix`, and quiet self-skill sync.
+- Manifest-declared organization skills used by `our setup`, `our sync`,
+  `our manifests sync`, `our skills install|sync|purge|status`, and tool-provided
+  `skill_install` commands.
+
+Rules:
+
+- Preserve the public manifest schema. our-ai translates its manifest declarations to a
+  skiller plan in memory or via a generated temp manifest; operators do not learn a
+  second manifest format.
+- Keep admin authoring in our-ai (`our admin skills`, `our admin tools`). skiller is the
+  materializer, not the manifest authoring UI.
+- Existing direct CLI/local installs are day-one inputs. `our setup` and
+  `our skills sync` must reuse/adopt/block them explicitly instead of creating duplicate
+  skill directories.
+- Keep Gemini cleanup/deprecation outside `data/harnesses.toml`. If a live our-ai
+  migration still needs Gemini cleanup, it is tool-local transition code.
+
+Gate:
+
+- `our setup`, `our doctor --fix`, and `our skills sync/purge/status --json` return the
+  same or stricter statuses than today, with canonical IDs preserved and modified local
+  copies protected.
+
+### 11.9 Milestone 7 - clawdapus cutover
+
+Adopt in two lanes:
+
+1. **Host CLI self-skill.** Replace `claw skill install` and `maybeSyncSkill` raw writes
+   with skiller-managed installs to Claude Code and the shared `.agents` target. The
+   existing `~/.claw/skill-installed` marker is read only as a migration/adoption hint.
+2. **Runtime Agent Skill target-dir mode.** Use `--target-dir ... --scope runtime`
+   only for driver-declared Agent Skill directory layouts. Do not route flat
+   service-surface markdown generation, generated `CLAWDAPUS.md`, service descriptor
+   extraction, or pod skill inheritance through skiller in v1.
+
+Gate:
+
+- A clawdapus fixture pod proves runtime target-dir copy mode survives container mount
+  boundaries, and existing flat skill files continue to be generated by clawdapus
+  unchanged.
+
+### 11.10 Milestone 8 - remove built-in installers
+
+After each adopter has shipped one stable skiller-backed release:
+
+- Delete duplicated planner/writer code from talking-stick, gnit, our-ai, and
+  clawdapus.
+- Keep only thin command adapters, bootstrap/version checks, tool-local migration code,
+  and tool-specific extras that are genuinely outside skiller's domain.
+- Update docs to name `skiller` as the shared implementation while retaining each
+  tool's user-facing commands.
+- Add cross-repo release checks that fail when a tool modifies local skill-install
+  semantics instead of updating skiller.
+
+Gate:
+
+- A matrix run across the four repos verifies clean install, repeated no-op install,
+  upgrade/sync, uninstall, foreign target preservation, and modified-copy preservation
+  on temp homes.
+
+### 11.11 Later extensions
+
+- Prove registry extensibility by adding one new host harness as a data-only change.
+- Export a machine-readable registry that upstream tools can consume.
+- Export/contribute the marker-scheme table (`data/markers.toml`) so independent
+  installers can recognize each other's installs instead of clobbering them.
+- Consider upstream contributions to Vercel's `skills` ecosystem: Antigravity support,
+  exported static registry data, or a static-binary backend.
+- Add content-rewriting overlay mode only if a real cross-namespace frontmatter
+  collision requires it.
 
 ## 12. Codex review resolutions
 
@@ -474,15 +859,33 @@ behavior:
 - **Host OpenClaw/Hermes:** do not add as host-autodetected named harnesses in v1.
   Clawdapus uses runtime target-dir mode. Add host profiles only after verifying actual
   runner discovery behavior outside Claw.
-- **Local DB:** add `pkg/state` in M1, even if M1 only writes the DB during `plan` tests
-  and no-op dry runs. Provenance/conflict tracking is part of the core contract, not a
-  later feature.
+- **State:** add a persisted JSON ledger in v1 because day-one coexistence requires
+  remembering observed local/direct-CLI installs, conflicts, and chosen resolutions.
+  Markers and symlink realpaths remain authoritative for destructive safety; the ledger
+  is authoritative for explaining coexistence and avoiding duplicate installs.
 - **Namespace policy:** ship canonical namespace support in v1. Conflict prevention is
   blocking/reporting by default; physical renaming is explicit through `install_slug`
-  and may force copy/overlay mode.
+  while content-rewriting overlay mode is deferred.
 - **Gemini removal:** remove Gemini from the registry and v1 supported harnesses.
   Google cutoff is June 18, 2026 for consumer requests. Tool-local cleanup of old
   Gemini installs is allowed; new shared installer support is not.
+
+**Convergence review 2 (claude) resolutions:**
+
+- **Observe / plan / apply:** lift filesystem reads out of the planner. `pkg/observe`
+  produces a `WorldState`; `pkg/plan` is pure over it, so the §6.7 decision table is
+  table-testable. Resolves the prior "pure planner that nonetheless scans the FS"
+  inconsistency.
+- **Data-driven ownership:** unify legacy adapters and foreign-install detection into one
+  extensible `data/markers.toml` (`class ∈ {ours-legacy, foreign}`). Recognizing a new
+  tool or marketplace is a data change, not planner code.
+- **No-duplicate survey scope:** the cross-root duplicate survey covers the roots read by
+  the in-scope harnesses (each one's shared + proprietary roots), not every root on disk.
+- **Decision-table completeness:** `absent`, `ours-legacy`, and `partially-satisfied` are
+  explicit rows; `ours-legacy` adopts as ours rather than blocking as foreign, so a tool
+  can replace its own pre-skiller installs.
+- **Prompt fallback:** `--on-conflict prompt` with no TTY falls back to `block` + report;
+  it never hangs or guesses a default.
 
 ## 13. Naming (decided)
 
