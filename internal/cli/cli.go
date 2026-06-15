@@ -11,6 +11,7 @@ import (
 
 	"github.com/mostlydev/skiller/internal/app"
 	"github.com/mostlydev/skiller/internal/planner"
+	"github.com/mostlydev/skiller/internal/selfupdate"
 	"github.com/mostlydev/skiller/pkg/install"
 	planpkg "github.com/mostlydev/skiller/pkg/plan"
 	"github.com/mostlydev/skiller/pkg/version"
@@ -44,6 +45,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runConflicts(args[1:], stdout)
 	case "state":
 		return runState(args[1:], stdout)
+	case "selfupdate":
+		return runSelfupdate(args[1:], stdout)
 	case "-h", "--help", "help":
 		return usage(stdout)
 	default:
@@ -549,6 +552,49 @@ func runStateRepair(args []string, stdout io.Writer) error {
 	return writeJSON(stdout, ledger)
 }
 
+func runSelfupdate(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller selfupdate", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	repo := fs.String("repo", selfupdate.DefaultRepo, "GitHub repository owner/name")
+	updateVersion := fs.String("version", selfupdate.DefaultVersion, "release version")
+	check := fs.Bool("check", false, "check for an update without writing")
+	dryRun := fs.Bool("dry-run", false, "show planned update without writing")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	result, err := selfupdate.Run(context.Background(), selfupdate.Options{
+		Repo:    *repo,
+		Version: *updateVersion,
+		Check:   *check,
+		DryRun:  *dryRun,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result)
+	}
+	return writeSelfupdateHuman(stdout, result)
+}
+
+func writeSelfupdateHuman(stdout io.Writer, result selfupdate.Result) error {
+	switch result.Status {
+	case "updated":
+		_, err := fmt.Fprintf(stdout, "Updated skiller to %s at %s\n", result.TargetVersion, result.ExecutablePath)
+		return err
+	case "dry-run":
+		_, err := fmt.Fprintf(stdout, "Would update skiller from %s to %s at %s\n", result.CurrentVersion, result.TargetVersion, result.ExecutablePath)
+		return err
+	case "update-available":
+		_, err := fmt.Fprintf(stdout, "skiller %s is available (current %s)\n", result.TargetVersion, result.CurrentVersion)
+		return err
+	default:
+		_, err := fmt.Fprintf(stdout, "skiller is up to date (%s)\n", result.CurrentVersion)
+		return err
+	}
+}
+
 func usage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, `Usage:
   skiller registry --json
@@ -562,7 +608,8 @@ func usage(w io.Writer) error {
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts resolve --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--resolution ID=POLICY] [--install-slug SLUG|ID=SLUG] [--force] [--lock-timeout DURATION]
-  skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]`)
+  skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]
+  skiller selfupdate [--check] [--dry-run] [--json] [--version VERSION] [--repo OWNER/REPO]`)
 	return err
 }
 

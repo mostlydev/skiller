@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/selfupdate.schema.json",
+  "title": "Skiller selfupdate result",
+  "description": "Machine-readable result returned by `skiller selfupdate --json` and `skiller selfupdate --check --json`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "repo",
+    "requested_version",
+    "current_version",
+    "target_version",
+    "target_os",
+    "target_arch",
+    "archive",
+    "checksum",
+    "update_available",
+    "check",
+    "dry_run",
+    "status"
+  ],
+  "properties": {
+    "schema": { "const": "skiller-selfupdate.v1" },
+    "repo": { "type": "string", "minLength": 1 },
+    "requested_version": { "type": "string", "minLength": 1 },
+    "current_version": { "type": "string", "minLength": 1 },
+    "target_version": { "type": "string" },
+    "target_os": { "type": "string", "minLength": 1 },
+    "target_arch": { "type": "string", "minLength": 1 },
+    "archive": { "type": "string" },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "executable_path": { "type": "string" },
+    "update_available": { "type": "boolean" },
+    "check": { "type": "boolean" },
+    "dry_run": { "type": "boolean" },
+    "status": {
+      "enum": ["update-available", "up-to-date", "dry-run", "updated"]
+    },
+    "message": { "type": "string" }
+  }
+}
