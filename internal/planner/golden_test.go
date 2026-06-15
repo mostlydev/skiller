@@ -96,3 +96,65 @@ func TestGoldenPlans(t *testing.T) {
 		})
 	}
 }
+
+func TestM3ResolvedPlanGoldens(t *testing.T) {
+	cases := []struct {
+		name       string
+		manifest   string
+		onConflict string
+	}{
+		{"namespace-skip", "namespace-collision.toml", "skip"},
+	}
+
+	fixturesAbs, err := filepath.Abs(filepath.Join("..", "..", "testdata", "m0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixturesResolved, err := filepath.EvalSymlinks(fixturesAbs)
+	if err != nil {
+		fixturesResolved = fixturesAbs
+	}
+	goldenRoot := filepath.Join("..", "..", "testdata", "m3", "golden")
+
+	const home = "/skiller/golden/home"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := filepath.Join(fixturesAbs, "manifests", tc.manifest)
+			plan, err := Build(Options{ManifestPath: manifest, Home: home, OnConflict: tc.onConflict})
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			SortPlan(&plan)
+
+			raw, err := json.MarshalIndent(plan, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			norm := string(raw) + "\n"
+			if fixturesResolved != fixturesAbs {
+				norm = strings.ReplaceAll(norm, fixturesResolved, "<FIXTURES>")
+			}
+			norm = strings.ReplaceAll(norm, fixturesAbs, "<FIXTURES>")
+			norm = sourceKeyRe.ReplaceAllString(norm, `"source_key": "file:<redacted>"`)
+
+			goldenPath := filepath.Join(goldenRoot, tc.name+".plan.json")
+			if *updateGolden {
+				if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(goldenPath, []byte(norm), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			want, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatalf("read golden (regenerate with `go test ./internal/planner -run TestM3ResolvedPlanGoldens -update`): %v", err)
+			}
+			if string(want) != norm {
+				t.Fatalf("plan for %s does not match %s; regenerate with -update if intended.\n--- got ---\n%s", tc.name, goldenPath, norm)
+			}
+		})
+	}
+}

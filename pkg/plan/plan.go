@@ -32,9 +32,15 @@ type Options struct {
 	Project      string
 	Namespace    string
 	OnConflict   string
+	Resolutions  map[string]Resolution
 }
 
-var conflictModes = []string{"block", "skip", "adopt-existing", "replace-owned", "rename", "force-replace"}
+type Resolution struct {
+	Policy      string
+	InstallSlug string
+}
+
+var allConflictModes = []string{"block", "skip", "adopt-existing", "replace-owned", "rename", "force-replace"}
 
 type builder struct {
 	in            Inputs
@@ -159,9 +165,8 @@ func (b *builder) planTargetAction(snapshot source.Snapshot, skill contract.Plan
 		action.Action = "partially-satisfied"
 		action.Status = "blocked"
 		action.Reason = "a selected reader already has a matching foreign/proprietary copy; writing the shared target would create a duplicate for that reader"
-		action.ConflictModes = conflictModes
-		b.addConflict(targetRef, skill, "partial-satisfaction")
-		return action
+		conflict := b.newConflict(targetRef, skill, "", "partial-satisfaction")
+		return b.resolveConflict(action, conflict, matchingDuplicateRef(candidate, partial.Path), partial)
 	}
 	switch ownership.Class {
 	case "absent":
@@ -188,9 +193,8 @@ func (b *builder) planTargetAction(snapshot source.Snapshot, skill contract.Plan
 			action.Action = "block-conflict"
 			action.Status = "blocked"
 			action.Reason = ownership.Message
-			action.ConflictModes = conflictModes
-			b.addConflict(targetRef, skill, "modified-owned-copy")
-			return action
+			conflict := b.newConflict(targetRef, skill, "", "modified-owned-copy")
+			return b.resolveConflict(action, conflict, target.Ref{}, nil)
 		}
 		action.Action = "refresh"
 		action.PlannedWrites = []contract.PlannedWrite{{Kind: mode.Effective, Path: targetRef.Path}}
@@ -212,8 +216,8 @@ func (b *builder) planTargetAction(snapshot source.Snapshot, skill contract.Plan
 		action.Action = "block-conflict"
 		action.Status = "blocked"
 		action.Reason = "existing target is not skiller-owned and does not match desired source"
-		action.ConflictModes = conflictModes
-		b.addConflict(targetRef, skill, "foreign-target")
+		conflict := b.newConflict(targetRef, skill, "", "foreign-target")
+		return b.resolveConflict(action, conflict, target.Ref{}, nil)
 	}
 	return action
 }
@@ -310,9 +314,8 @@ func (b *builder) applyDesiredCollision(action contract.PlanAction, skill contra
 		action.Action = "block-conflict"
 		action.Status = "blocked"
 		action.Reason = "manifest requests the same harness-visible target path for different canonical IDs"
-		action.ConflictModes = conflictModes
-		b.addConflictWithExisting(targetRef, skill, existing, "namespace-collision")
-		return action
+		conflict := b.newConflict(targetRef, skill, existing, "namespace-collision")
+		return b.resolveConflict(action, conflict, target.Ref{}, nil)
 	}
 	b.desiredByPath[targetRef.Path] = skill.CanonicalID
 	return action
@@ -344,12 +347,8 @@ func planActionKey(action contract.PlanAction) string {
 	return ""
 }
 
-func (b *builder) addConflict(targetRef target.Ref, skill contract.PlanSkill, status string) {
-	b.addConflictWithExisting(targetRef, skill, "", status)
-}
-
-func (b *builder) addConflictWithExisting(targetRef target.Ref, skill contract.PlanSkill, existingCanonicalID string, status string) {
-	b.conflicts = append(b.conflicts, contract.PlanConflict{
+func (b *builder) newConflict(targetRef target.Ref, skill contract.PlanSkill, existingCanonicalID string, status string) contract.PlanConflict {
+	return contract.PlanConflict{
 		ID:                  actionID("conflict", skill.CanonicalID, targetRef.Path),
 		TargetKind:          targetRef.Kind,
 		TargetID:            targetRef.ID,
@@ -357,8 +356,92 @@ func (b *builder) addConflictWithExisting(targetRef target.Ref, skill contract.P
 		ExistingCanonicalID: existingCanonicalID,
 		DesiredCanonicalID:  skill.CanonicalID,
 		Status:              status,
-		SafeChoices:         conflictModes,
-	})
+		SafeChoices:         applicableConflictModes(status),
+	}
+}
+
+func (b *builder) addConflict(conflict contract.PlanConflict) {
+	b.conflicts = append(b.conflicts, conflict)
+}
+
+func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.PlanConflict, duplicateRef target.Ref, duplicateObs *contract.ObservedOwnership) contract.PlanAction {
+	action.ConflictModes = conflict.SafeChoices
+	policy := b.resolutionPolicy(conflict)
+	if policy == "" || policy == "prompt" || policy == "block" {
+		b.addConflict(conflict)
+		return action
+	}
+	resolved := conflict
+	if !policyApplies(conflict.Status, policy) {
+		action.Reason = "resolution " + policy + " is not applicable to " + conflict.Status
+		b.addConflict(conflict)
+		return action
+	}
+	resolved.Resolution = policy
+	action.ConflictModes = nil
+	switch policy {
+	case "skip":
+		action.Action = "no-op"
+		action.Status = "dry-run"
+		action.Reason = "conflict skipped by resolution"
+		action.PlannedWrites = nil
+	case "adopt-existing":
+		action.Action = "adopt-existing"
+		action.Status = "dry-run"
+		action.Reason = "existing target accepted by resolution; skiller records lineage without mutating the target"
+		action.PlannedWrites = nil
+		if conflict.Status == "partial-satisfaction" && duplicateRef.Path != "" && duplicateObs != nil {
+			action.ID = actionID(action.Skill.CanonicalID, duplicateRef.ID, duplicateRef.Path)
+			action.Target = duplicateRef
+			action.Ownership = *duplicateObs
+		}
+	case "replace-owned":
+		action.Action = "refresh"
+		action.Status = "dry-run"
+		action.Reason = "owned copy replaced by resolution"
+		action.PlannedWrites = []contract.PlannedWrite{{Kind: action.Mode.Effective, Path: action.Target.Path}}
+	}
+	b.addConflict(resolved)
+	return action
+}
+
+func (b *builder) resolutionPolicy(conflict contract.PlanConflict) string {
+	if b.in.Options.Resolutions != nil {
+		if resolution, ok := b.in.Options.Resolutions[conflict.ID]; ok && strings.TrimSpace(resolution.Policy) != "" {
+			return strings.TrimSpace(resolution.Policy)
+		}
+	}
+	return strings.TrimSpace(b.in.Options.OnConflict)
+}
+
+func applicableConflictModes(status string) []string {
+	var modes []string
+	switch status {
+	case "modified-owned-copy":
+		modes = []string{"block", "skip", "replace-owned", "force-replace"}
+	case "foreign-target":
+		modes = []string{"block", "skip", "adopt-existing", "rename", "force-replace"}
+	case "namespace-collision":
+		modes = []string{"block", "skip", "rename"}
+	case "partial-satisfaction":
+		modes = []string{"block", "skip", "adopt-existing"}
+	default:
+		modes = allConflictModes
+	}
+	return append([]string(nil), modes...)
+}
+
+func policyApplies(status, policy string) bool {
+	switch policy {
+	case "skip":
+		return true
+	case "adopt-existing":
+		return status == "foreign-target" || status == "partial-satisfaction"
+	case "replace-owned":
+		return status == "modified-owned-copy"
+	default:
+		return false
+	}
 }
 
 func firstMatchingForeign(observations []contract.ObservedOwnership) *contract.ObservedOwnership {
@@ -369,6 +452,15 @@ func firstMatchingForeign(observations []contract.ObservedOwnership) *contract.O
 		}
 	}
 	return nil
+}
+
+func matchingDuplicateRef(candidate target.Candidate, path string) target.Ref {
+	for _, duplicate := range candidate.Duplicates {
+		if duplicate.Path == path {
+			return duplicate
+		}
+	}
+	return target.Ref{}
 }
 
 func classifyExtra(raw observe.RawObservation, path, desiredDigest string) contract.ObservedOwnership {

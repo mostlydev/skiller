@@ -6,7 +6,7 @@
     "manifest_path": "<FIXTURES>/manifests/namespace-collision.toml",
     "home": "/skiller/golden/home",
     "namespace": "alpha",
-    "on_conflict": "block"
+    "on_conflict": "skip"
   },
   "sources": [
     {
@@ -88,9 +88,9 @@
     },
     {
       "id": "act-f684a1e7c817d6e2",
-      "action": "block-conflict",
-      "status": "blocked",
-      "reason": "manifest requests the same harness-visible target path for different canonical IDs",
+      "action": "no-op",
+      "status": "dry-run",
+      "reason": "conflict skipped by resolution",
       "skill": {
         "canonical_id": "beta:debugging",
         "namespace": "alpha",
@@ -128,18 +128,7 @@
       "ownership": {
         "class": "absent",
         "path": "/skiller/golden/home/.agents/skills/debugging"
-      },
-      "conflict_modes": [
-        "block",
-        "skip",
-        "rename"
-      ],
-      "planned_writes": [
-        {
-          "kind": "link",
-          "path": "/skiller/golden/home/.agents/skills/debugging"
-        }
-      ]
+      }
     }
   ],
   "conflicts": [
@@ -151,6 +140,7 @@
       "existing_canonical_id": "alpha:debugging",
       "desired_canonical_id": "beta:debugging",
       "status": "namespace-collision",
+      "resolution": "skip",
       "safe_choices": [
         "block",
         "skip",

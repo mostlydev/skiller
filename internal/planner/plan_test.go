@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mostlydev/skiller/internal/contract"
+	planpkg "github.com/mostlydev/skiller/pkg/plan"
 )
 
 func TestRegistryIncludesVerifiedFleet(t *testing.T) {
@@ -116,6 +117,27 @@ func TestProprietaryDuplicateProducesPartialSatisfaction(t *testing.T) {
 	if len(plan.Conflicts) == 0 {
 		t.Fatal("expected conflict for partial satisfaction")
 	}
+	assertStrings(t, action.ConflictModes, []string{"block", "skip", "adopt-existing"})
+}
+
+func TestResolutionAdoptsPartialSatisfactionWithoutDuplicate(t *testing.T) {
+	home := t.TempDir()
+	src := fixturePath(t, "sources/talking-stick")
+	duplicate := filepath.Join(home, ".codex/skills/talking-stick")
+	copyDir(t, src, duplicate)
+
+	plan := mustPlanWithOptions(t, "talking-stick.toml", home, func(opts *Options) {
+		opts.OnConflict = "adopt-existing"
+	})
+	action := assertAction(t, plan, "mostlydev:talking-stick", duplicate, "adopt-existing")
+	if len(action.PlannedWrites) != 0 {
+		t.Fatalf("planned writes = %#v, want none for ledger-only duplicate adoption", action.PlannedWrites)
+	}
+	if action.Ownership.Path != duplicate {
+		t.Fatalf("ownership path = %q, want duplicate path %q", action.Ownership.Path, duplicate)
+	}
+	conflict := assertConflict(t, plan, "partial-satisfaction", "adopt-existing")
+	assertStrings(t, conflict.SafeChoices, []string{"block", "skip", "adopt-existing"})
 }
 
 func TestOwnedStaleCopyPlansRefresh(t *testing.T) {
@@ -160,6 +182,59 @@ func TestOwnedModifiedCopyBlocks(t *testing.T) {
 	if action.Status != "blocked" {
 		t.Fatalf("status = %q, want blocked", action.Status)
 	}
+	assertStrings(t, action.ConflictModes, []string{"block", "skip", "replace-owned", "force-replace"})
+}
+
+func TestResolutionReplacesModifiedOwnedCopy(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".agents/skills/talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: talking-stick\n---\n\nold\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldDigest, err := digestPath(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMarker(t, target, "talking-stick", "mostlydev:talking-stick", oldDigest)
+	if err := os.WriteFile(filepath.Join(target, "local-notes.md"), []byte("operator edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := mustPlanWithOptions(t, "talking-stick.toml", home, func(opts *Options) {
+		opts.OnConflict = "replace-owned"
+	})
+	action := assertAction(t, plan, "mostlydev:talking-stick", target, "refresh")
+	if len(action.PlannedWrites) == 0 {
+		t.Fatalf("planned writes = %#v, want refresh write", action.PlannedWrites)
+	}
+	assertConflict(t, plan, "modified-owned-copy", "replace-owned")
+}
+
+func TestResolutionAdoptsForeignTargetWithoutClaimingDigestMatch(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".agents/skills/talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := mustPlanWithOptions(t, "talking-stick.toml", home, func(opts *Options) {
+		opts.OnConflict = "adopt-existing"
+	})
+	action := assertAction(t, plan, "mostlydev:talking-stick", target, "adopt-existing")
+	if action.Ownership.DigestMatch == nil || *action.Ownership.DigestMatch {
+		t.Fatalf("digest_match = %#v, want false for mismatching adopted foreign target", action.Ownership.DigestMatch)
+	}
+	if len(action.PlannedWrites) != 0 {
+		t.Fatalf("planned writes = %#v, want none for ledger-only foreign adoption", action.PlannedWrites)
+	}
+	conflict := assertConflict(t, plan, "foreign-target", "adopt-existing")
+	assertStrings(t, conflict.SafeChoices, []string{"block", "skip", "adopt-existing", "rename", "force-replace"})
 }
 
 func TestRuntimeTargetDirDefaultsToCopy(t *testing.T) {
@@ -193,12 +268,64 @@ func TestManifestNamespaceCollisionBlocksSecondPlan(t *testing.T) {
 	if len(plan.Conflicts) != 1 || plan.Conflicts[0].Status != "namespace-collision" {
 		t.Fatalf("conflicts = %#v, want namespace-collision", plan.Conflicts)
 	}
+	assertStrings(t, plan.Conflicts[0].SafeChoices, []string{"block", "skip", "rename"})
+}
+
+func TestResolutionSkipsNamespaceCollision(t *testing.T) {
+	home := t.TempDir()
+	plan := mustPlanWithOptions(t, "namespace-collision.toml", home, func(opts *Options) {
+		opts.OnConflict = "skip"
+	})
+	action := assertAction(t, plan, "beta:debugging", filepath.Join(home, ".agents/skills/debugging"), "no-op")
+	if len(action.PlannedWrites) != 0 {
+		t.Fatalf("planned writes = %#v, want none for skipped conflict", action.PlannedWrites)
+	}
+	assertConflict(t, plan, "namespace-collision", "skip")
+}
+
+func TestResolutionMapOverridesDefaultPolicyByConflictID(t *testing.T) {
+	home := t.TempDir()
+	blocked := mustPlan(t, "namespace-collision.toml", home)
+	conflict := assertConflict(t, blocked, "namespace-collision", "")
+
+	plan := mustPlanWithOptions(t, "namespace-collision.toml", home, func(opts *Options) {
+		opts.OnConflict = "block"
+		opts.Resolutions = map[string]planpkg.Resolution{
+			conflict.ID: {Policy: "skip"},
+		}
+	})
+	assertAction(t, plan, "beta:debugging", filepath.Join(home, ".agents/skills/debugging"), "no-op")
+	assertConflict(t, plan, "namespace-collision", "skip")
+}
+
+func TestInapplicableResolutionRemainsBlocked(t *testing.T) {
+	home := t.TempDir()
+	plan := mustPlanWithOptions(t, "namespace-collision.toml", home, func(opts *Options) {
+		opts.OnConflict = "adopt-existing"
+	})
+	action := assertAction(t, plan, "beta:debugging", filepath.Join(home, ".agents/skills/debugging"), "block-conflict")
+	if action.Status != "blocked" {
+		t.Fatalf("status = %q, want blocked", action.Status)
+	}
+	if action.Reason != "resolution adopt-existing is not applicable to namespace-collision" {
+		t.Fatalf("reason = %q", action.Reason)
+	}
+	assertConflict(t, plan, "namespace-collision", "")
 }
 
 func mustPlan(t *testing.T, manifestName, home string) contract.Plan {
 	t.Helper()
+	return mustPlanWithOptions(t, manifestName, home, nil)
+}
+
+func mustPlanWithOptions(t *testing.T, manifestName, home string, configure func(*Options)) contract.Plan {
+	t.Helper()
 	manifest := filepath.Join(fixturePath(t, "manifests"), manifestName)
-	plan, err := Build(Options{ManifestPath: manifest, Home: home})
+	opts := Options{ManifestPath: manifest, Home: home}
+	if configure != nil {
+		configure(&opts)
+	}
+	plan, err := Build(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +358,32 @@ func assertAction(t *testing.T, plan contract.Plan, canonicalID, targetPath, act
 	}
 	t.Fatalf("missing action %s for %s at %s; actions=%#v", actionName, canonicalID, targetPath, plan.Actions)
 	return contract.PlanAction{}
+}
+
+func assertConflict(t *testing.T, plan contract.Plan, status, resolution string) contract.PlanConflict {
+	t.Helper()
+	for _, conflict := range plan.Conflicts {
+		if conflict.Status == status {
+			if conflict.Resolution != resolution {
+				t.Fatalf("conflict resolution for %s = %q, want %q; conflict=%#v", status, conflict.Resolution, resolution, conflict)
+			}
+			return conflict
+		}
+	}
+	t.Fatalf("missing conflict status %q; conflicts=%#v", status, plan.Conflicts)
+	return contract.PlanConflict{}
+}
+
+func assertStrings(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("strings = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("strings = %#v, want %#v", got, want)
+		}
+	}
 }
 
 func findExtraAction(plan contract.Plan, id string) *contract.PlanAction {

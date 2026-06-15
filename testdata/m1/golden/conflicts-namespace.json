@@ -14,10 +14,7 @@
         "safe_choices": [
           "block",
           "skip",
-          "adopt-existing",
-          "replace-owned",
-          "rename",
-          "force-replace"
+          "rename"
         ]
       }
     }
