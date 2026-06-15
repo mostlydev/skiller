@@ -10,6 +10,7 @@ import (
 
 	"github.com/mostlydev/skiller/internal/app"
 	"github.com/mostlydev/skiller/internal/planner"
+	"github.com/mostlydev/skiller/pkg/install"
 )
 
 func Run(args []string, stdout, stderr io.Writer) error {
@@ -130,7 +131,34 @@ func runInstall(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, result)
+	if err := writeJSON(stdout, result); err != nil {
+		return err
+	}
+	if failed, blocked := countFailedBlocked(result); failed > 0 || blocked > 0 {
+		return actionStatusError{failed: failed, blocked: blocked}
+	}
+	return nil
+}
+
+type actionStatusError struct {
+	failed  int
+	blocked int
+}
+
+func (e actionStatusError) Error() string {
+	return fmt.Sprintf("install completed with %d failed and %d blocked action(s)", e.failed, e.blocked)
+}
+
+func countFailedBlocked(result install.Result) (failed, blocked int) {
+	for _, action := range result.Actions {
+		switch action.Status {
+		case "failed":
+			failed++
+		case "blocked":
+			blocked++
+		}
+	}
+	return failed, blocked
 }
 
 func runStatus(args []string, stdout io.Writer) error {

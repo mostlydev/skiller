@@ -26,7 +26,7 @@
       "enum": ["block", "prompt", "skip", "adopt-existing", "replace-owned", "rename", "force-replace"]
     },
     "result_status": {
-      "enum": ["installed", "updated", "removed", "skipped", "dry-run", "failed", "not-installed", "blocked", "stale", "modified"]
+      "enum": ["installed", "updated", "removed", "skipped", "dry-run", "failed", "not-installed", "blocked", "stale", "modified", "satisfied-by-foreign", "partially-satisfied"]
     }
   },
   "type": "object",

@@ -179,7 +179,7 @@ func (b *builder) planTargetAction(snapshot source.Snapshot, skill contract.Plan
 	case "ours-legacy":
 		if ownership.DigestMatch != nil && *ownership.DigestMatch {
 			action.Action = "adopt-existing"
-			action.Reason = "legacy marker belongs to an adopting tool; skiller would record lineage and upgrade marker on apply"
+			action.Reason = "legacy marker belongs to an adopting tool; skiller records lineage without mutating the target"
 		} else {
 			action.Action = "refresh"
 			action.Reason = "legacy marker belongs to an adopting tool; skiller would replace as owned on apply"

@@ -309,18 +309,30 @@ func sweepOrphans(prepared preparedPlan) error {
 }
 
 func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install.Result) {
+	plannedByID := map[string]contract.PlanAction{}
+	for _, action := range plan.Actions {
+		plannedByID[action.ID] = action
+	}
+	sourcesByID := map[string]contract.SourceSnapshot{}
 	for _, source := range plan.Sources {
+		sourcesByID[source.ID] = source
 		upsertSource(ledger, source)
 	}
 	for _, action := range result.Actions {
+		planned := plannedByID[action.ID]
 		switch action.Status {
 		case "installed", "updated":
 			if action.Skill != nil {
 				upsertSkill(ledger, *action.Skill)
-				upsertInstall(ledger, action)
+				upsertInstall(ledger, action, planned, sourcesByID)
 			}
 			if action.Extra != nil {
 				upsertExtra(ledger, action)
+			}
+		case "skipped":
+			if action.Skill != nil && isLedgerOnlyAdoption(action.Action) {
+				upsertSkill(ledger, *action.Skill)
+				upsertInstall(ledger, action, planned, sourcesByID)
 			}
 		case "blocked":
 			for _, conflict := range result.Conflicts {
@@ -328,6 +340,10 @@ func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install
 			}
 		}
 	}
+}
+
+func isLedgerOnlyAdoption(action string) bool {
+	return action == "adopt-existing" || action == "satisfied-by-foreign"
 }
 
 func upsertSource(ledger *state.Ledger, source contract.SourceSnapshot) {
@@ -374,18 +390,22 @@ func upsertSkill(ledger *state.Ledger, skill contract.PlanSkill) {
 	ledger.Skills = append(ledger.Skills, record)
 }
 
-func upsertInstall(ledger *state.Ledger, action install.ActionResult) {
+func upsertInstall(ledger *state.Ledger, action install.ActionResult, planned contract.PlanAction, sources map[string]contract.SourceSnapshot) {
+	source := sources[planned.SourceID]
 	record := state.InstallRecord{
-		ID:         "install:" + action.ID,
-		SkillID:    "skill:" + action.Skill.CanonicalID,
-		TargetKind: action.Target.Kind,
-		TargetID:   action.Target.ID,
-		TargetPath: action.Target.Path,
-		Mode:       firstNonEmpty(action.EffectiveMode, action.RequestedMode, "copy"),
-		Scope:      action.Target.Scope,
-		MarkerPath: markerPath(action),
-		Status:     action.Status,
-		LastSeenAt: time.Now().UTC().Format(time.RFC3339),
+		ID:                       "install:" + action.ID,
+		SkillID:                  "skill:" + action.Skill.CanonicalID,
+		TargetKind:               action.Target.Kind,
+		TargetID:                 action.Target.ID,
+		TargetPath:               action.Target.Path,
+		Mode:                     firstNonEmpty(action.EffectiveMode, action.RequestedMode, "copy"),
+		Scope:                    action.Target.Scope,
+		MarkerPath:               markerPath(action, planned.Ownership),
+		InstalledDigestAtInstall: installedDigest(action, planned, source),
+		SourceDigestAtInstall:    source.SourceDigest,
+		Status:                   installLedgerStatus(action),
+		LegacyAdapter:            planned.Ownership.LegacyAdapter,
+		LastSeenAt:               time.Now().UTC().Format(time.RFC3339),
 	}
 	for i := range ledger.Installs {
 		if ledger.Installs[i].ID == record.ID {
@@ -394,6 +414,26 @@ func upsertInstall(ledger *state.Ledger, action install.ActionResult) {
 		}
 	}
 	ledger.Installs = append(ledger.Installs, record)
+}
+
+func installLedgerStatus(action install.ActionResult) string {
+	if action.Action == "satisfied-by-foreign" {
+		return "satisfied-by-foreign"
+	}
+	if action.Action == "adopt-existing" {
+		return "installed"
+	}
+	return action.Status
+}
+
+func installedDigest(action install.ActionResult, planned contract.PlanAction, source contract.SourceSnapshot) string {
+	if planned.Ownership.Digest != "" {
+		return planned.Ownership.Digest
+	}
+	if action.Status == "installed" || action.Status == "updated" {
+		return source.SourceDigest
+	}
+	return ""
 }
 
 func upsertExtra(ledger *state.Ledger, action install.ActionResult) {
@@ -425,7 +465,10 @@ func upsertConflict(ledger *state.Ledger, conflict contract.PlanConflict) {
 	ledger.Conflicts = append(ledger.Conflicts, conflict)
 }
 
-func markerPath(action install.ActionResult) string {
+func markerPath(action install.ActionResult, ownership contract.ObservedOwnership) string {
+	if action.Action == "adopt-existing" || action.Action == "satisfied-by-foreign" {
+		return ownership.MarkerPath
+	}
 	if action.EffectiveMode == "copy" {
 		return filepath.Join(action.Target.Path, ".skiller-install.json")
 	}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/apply-result.schema.json",
+  "title": "Skiller apply result",
+  "description": "Mutating result returned by `skiller install --json` after executing the planned writes. Action-level blocked or failed statuses are reported here; pipeline failures return a non-zero error before this document is produced.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "actions"],
+  "properties": {
+    "schema": { "const": "skiller-apply-result.v1" },
+    "actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/action_result" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "plan.schema.json#/$defs/diagnostic" }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": { "$ref": "plan.schema.json#/$defs/conflict" }
+    }
+  },
+  "$defs": {
+    "action_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "action", "status", "target"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "action": {
+          "enum": [
+            "install-link",
+            "install-copy",
+            "install-extra",
+            "no-op",
+            "refresh",
+            "adopt-existing",
+            "block-conflict",
+            "partially-satisfied",
+            "satisfied-by-foreign"
+          ]
+        },
+        "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },
+        "reason": { "type": "string" },
+        "target": { "$ref": "plan.schema.json#/$defs/target" },
+        "skill": { "$ref": "plan.schema.json#/$defs/skill" },
+        "extra": { "$ref": "plan.schema.json#/$defs/extra" },
+        "requested_mode": { "enum": ["link", "copy"] },
+        "effective_mode": { "enum": ["link", "copy"] },
+        "fallback_applied": { "type": "boolean" },
+        "writes": {
+          "type": "array",
+          "items": { "$ref": "plan.schema.json#/$defs/planned_write" }
+        },
+        "error": { "type": "string" }
+      }
+    }
+  }
+}
