@@ -1,0 +1,21 @@
+schema = "skiller-install.v1"
+owner = "talking-stick"
+namespace = "mostlydev"
+version = "0.4.14"
+default_mode = "link"
+
+[[skills]]
+name = "talking-stick"
+canonical_id = "mostlydev:talking-stick"
+install_slug = "talking-stick"
+source = "../sources/talking-stick"
+targets = ["agents", "claude-code"]
+mode = "link"
+
+[[extras]]
+id = "grok-session-hook"
+harness = "grok"
+source = "../sources/talking-stick/grok-session.json"
+target = "~/.grok/hooks/talking-stick-session.json"
+mode = "copy"
+owned_marker = true

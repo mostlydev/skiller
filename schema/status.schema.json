@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/status.schema.json",
+  "title": "Skiller status output",
+  "description": "Merged ledger + live inspection view. Live filesystem facts win over stale state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "items"],
+  "properties": {
+    "schema": { "const": "skiller-status.v1" },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": { "$ref": "plan.schema.json#/$defs/conflict" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "plan.schema.json#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_id", "install_slug", "target", "status", "ownership"],
+      "properties": {
+        "canonical_id": { "type": "string" },
+        "install_slug": { "type": "string" },
+        "target": { "$ref": "plan.schema.json#/$defs/target" },
+        "status": {
+          "enum": [
+            "installed",
+            "not-installed",
+            "stale",
+            "modified",
+            "blocked",
+            "orphaned",
+            "not-seen",
+            "satisfied-by-foreign",
+            "partially-satisfied"
+          ]
+        },
+        "ownership": { "$ref": "plan.schema.json#/$defs/ownership" },
+        "source": { "$ref": "source-snapshot.schema.json" }
+      }
+    }
+  }
+}

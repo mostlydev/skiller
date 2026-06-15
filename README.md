@@ -12,7 +12,9 @@ It ships as a **single static Go binary** (plus an importable Go library core) s
 Go, Rust, and Node tools can all use it **without dragging a foreign runtime onto the
 host**.
 
-**Status:** design phase — nothing is implemented yet. Read the design:
+**Status:** M0 contract implementation is underway. The repository now has a Go CLI
+skeleton with `registry --json` and non-mutating `plan --json` over fixture manifests,
+embedded registry data, and JSON schema contracts. Read the design:
 [`docs/plans/2026-06-14-skiller-design.md`](docs/plans/2026-06-14-skiller-design.md).
 
 ## Why this exists
@@ -31,7 +33,7 @@ stays runtime-free.
 ## Planned CLI
 
 ```
-skiller plan      --manifest skiller.toml --json      # dry-run; same plan as install
+skiller plan      --manifest skiller.toml --json      # dry-run; implemented for M0 fixtures
 skiller install   --manifest skiller.toml             # idempotent, atomic
 skiller status    --json                              # installed / drift / ownership
 skiller sync      --manifest skiller.toml             # re-link, refresh, prune stale

@@ -1,0 +1,13 @@
+schema = "skiller-install.v1"
+owner = "our-ai"
+namespace = "acme"
+version = "2026.06.14"
+default_mode = "link"
+
+[[skills]]
+name = "handbook"
+canonical_id = "acme:handbook"
+install_slug = "acme-handbook"
+source = "../sources/acme-handbook"
+targets = ["claude-code", "codex"]
+mode = "link"

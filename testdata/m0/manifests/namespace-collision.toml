@@ -1,0 +1,18 @@
+schema = "skiller-install.v1"
+owner = "collision-fixture"
+namespace = "alpha"
+default_mode = "link"
+
+[[skills]]
+name = "debugging"
+canonical_id = "alpha:debugging"
+install_slug = "debugging"
+source = "../sources/talking-stick"
+targets = ["agents"]
+
+[[skills]]
+name = "debugging"
+canonical_id = "beta:debugging"
+install_slug = "debugging"
+source = "../sources/gnit"
+targets = ["agents"]

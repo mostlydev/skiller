@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/marker.schema.json",
+  "title": "Skiller copy-install marker (.skiller-install.json)",
+  "description": "Ownership marker written INSIDE a copy-installed skill directory (or as a sidecar `<target>.skiller-install.json` next to a single-file extra). It proves skiller ownership of a copy target so that sync, drift detection, and uninstall stay safe without trusting the state ledger alone (design doc §6.3, §6.5, §6.7). Symlink installs need NO marker: their ownership is proven by `realpath(target) == managed source`. The installed-directory digest is computed with this marker file (and any other installer metadata) excluded, so writing the marker never changes the digest it records.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "installer",
+    "owner",
+    "canonical_id",
+    "name",
+    "mode",
+    "target_kind",
+    "scope",
+    "installed_at",
+    "source_digest_at_install",
+    "installed_digest_at_install"
+  ],
+  "properties": {
+    "schema": {
+      "description": "Marker schema identifier. The version suffix is bumped on any breaking field change so an older skiller can refuse a newer marker it does not understand.",
+      "const": "skiller-install-marker.v1"
+    },
+    "installer": {
+      "description": "The skiller build that wrote this marker.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "skiller" },
+        "version": {
+          "description": "skiller semantic version, e.g. \"0.1.0\".",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "owner": {
+      "description": "Installer / package owner that requested the install (manifest `owner`), e.g. \"talking-stick\". Conservative delete requires this to match before skiller will remove the copy (§6.5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "namespace": {
+      "description": "Canonical provenance namespace (manifest `namespace`), e.g. \"mostlydev\".",
+      "type": "string"
+    },
+    "canonical_id": {
+      "description": "Stable `owner:name`-style identity, derived as `<namespace>:<name>` when not set explicitly (§6.3). Ownership is matched on owner + canonical_id (§6.7).",
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "description": "Skill name as declared by the manifest / source.",
+      "type": "string",
+      "minLength": 1
+    },
+    "install_slug": {
+      "description": "Harness-visible directory / effective name. Defaults to `name` when unset (§6.3).",
+      "type": "string"
+    },
+    "frontmatter_name": {
+      "description": "The `name:` field from the source SKILL.md frontmatter, when known. Used for namespace/effective-name collision detection (§6.8).",
+      "type": "string"
+    },
+    "mode": {
+      "description": "Install mode that produced this target. A marker exists only for copy installs; symlink installs carry no marker.",
+      "enum": ["copy"]
+    },
+    "target_kind": {
+      "description": "Kind of target root this copy lives in (§6.1, §6.2).",
+      "enum": ["shared", "proprietary", "runtime", "extra"]
+    },
+    "scope": {
+      "description": "Install scope: a named host harness target, or an explicit runtime target-dir (§6.2).",
+      "enum": ["host", "runtime"]
+    },
+    "source_realpath": {
+      "description": "Absolute realpath of the source at install time, when known (local-dir sources). Omitted for remote sources identified only by source_key.",
+      "type": "string"
+    },
+    "source_key": {
+      "description": "Stable per-source key (§6.9) linking this install back to its source-provenance row in the ledger. Present when the source was resolved through pkg/source.",
+      "type": "string"
+    },
+    "canonical_uri": {
+      "description": "Normalized source identity for dedupe / update (§6.9), present for remote sources.",
+      "type": "string"
+    },
+    "manifest_path": {
+      "description": "Path to the manifest that declared this install, when installed from a manifest rather than an ad-hoc source spec.",
+      "type": "string"
+    },
+    "installed_at": {
+      "description": "RFC 3339 timestamp of the install.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_digest_at_install": {
+      "description": "Digest of the source content at install time. The plan recomputes the desired digest from the live source; this field is the audit record of what was installed from (§6.5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "installed_digest_at_install": {
+      "description": "Digest of the installed copy at install time, with the marker and installer metadata excluded. Drift classification compares the live target digest against this value: equal -> STALE (safe managed copy), differs -> MODIFIED (locally edited, preserved unless --force) (§6.5).",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

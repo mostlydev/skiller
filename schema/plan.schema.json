@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/plan.schema.json",
+  "title": "Skiller JSON Plan",
+  "description": "Dry-run action graph returned by skiller plan --json and by every mutating command before apply.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation", "dry_run", "inputs", "actions"],
+  "properties": {
+    "schema": { "const": "skiller-plan.v1" },
+    "operation": { "enum": ["plan", "install", "sync", "update", "uninstall", "cleanup-duplicates"] },
+    "dry_run": { "type": "boolean" },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on_conflict"],
+      "properties": {
+        "manifest_path": { "type": "string" },
+        "home": { "type": "string" },
+        "project": { "type": "string" },
+        "namespace": { "type": "string" },
+        "on_conflict": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "source-snapshot.schema.json" }
+    },
+    "actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/conflict" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "action", "status", "target", "mode", "ownership"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "action": {
+          "enum": [
+            "install-link",
+            "install-copy",
+            "install-extra",
+            "no-op",
+            "refresh",
+            "adopt-existing",
+            "block-conflict",
+            "partially-satisfied",
+            "satisfied-by-foreign"
+          ]
+        },
+        "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },
+        "reason": { "type": "string" },
+        "skill": { "$ref": "#/$defs/skill" },
+        "extra": { "$ref": "#/$defs/extra" },
+        "source_id": { "type": "string" },
+        "target": { "$ref": "#/$defs/target" },
+        "mode": { "$ref": "#/$defs/mode" },
+        "ownership": { "$ref": "#/$defs/ownership" },
+        "related_observations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ownership" }
+        },
+        "conflict_modes": {
+          "type": "array",
+          "items": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" }
+        },
+        "planned_writes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/planned_write" }
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_id", "namespace", "name", "install_slug"],
+      "properties": {
+        "canonical_id": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "install_slug": { "type": "string", "minLength": 1 },
+        "frontmatter_name": { "type": "string" },
+        "description": { "type": "string" },
+        "requested_targets": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "extra": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "target"],
+      "properties": {
+        "id": { "type": "string" },
+        "source": { "type": "string" },
+        "target": { "type": "string" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "scope", "root", "path", "lock_id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["shared", "shared-reader", "proprietary", "runtime", "extra"] },
+        "scope": { "enum": ["host", "runtime"] },
+        "root": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "readers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "requested_targets": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "lock_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "effective"],
+      "properties": {
+        "requested": { "enum": ["link", "copy"] },
+        "effective": { "enum": ["link", "copy"] },
+        "fallback_possible": { "type": "boolean" }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class"],
+      "properties": {
+        "class": { "$ref": "source-snapshot.schema.json#/$defs/ownership_class" },
+        "path": { "type": "string" },
+        "digest": { "type": "string" },
+        "digest_match": { "type": "boolean" },
+        "marker_path": { "type": "string" },
+        "legacy_adapter": { "type": "string" },
+        "source_realpath": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "planned_write": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "enum": ["link", "copy", "file", "marker", "sidecar-marker", "remove-legacy-marker"] },
+        "path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target_kind", "target_id", "effective_name", "desired_canonical_id", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "target_kind": { "type": "string" },
+        "target_id": { "type": "string" },
+        "effective_name": { "type": "string" },
+        "existing_canonical_id": { "type": "string" },
+        "desired_canonical_id": { "type": "string" },
+        "status": { "type": "string" },
+        "resolution": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" },
+        "safe_choices": {
+          "type": "array",
+          "items": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "message"],
+      "properties": {
+        "level": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+schema = "skiller-install.v1"
+owner = "gnit"
+namespace = "mostlydev"
+version = "0.9.0"
+default_mode = "link"
+
+[[skills]]
+name = "gnit"
+canonical_id = "mostlydev:gnit"
+install_slug = "gnit"
+source = "../sources/gnit"
+mode = "link"
+
+[[skills.target_dirs]]
+id = "claude-code-proprietary"
+path = "~/.claude/skills"
+scope = "host"
+kind = "proprietary"
+reader = "claude-code"
+
+[[skills.target_dirs]]
+id = "codex-proprietary"
+path = "~/.codex/skills"
+scope = "host"
+kind = "proprietary"
+reader = "codex"
+
+[[skills.target_dirs]]
+id = "opencode-proprietary"
+path = "~/.opencode/skills"
+scope = "host"
+kind = "proprietary"
+reader = "opencode"
+
+[[skills.target_dirs]]
+id = "grok-proprietary"
+path = "~/.grok/skills"
+scope = "host"
+kind = "proprietary"
+reader = "grok"

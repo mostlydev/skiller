@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/source-snapshot.schema.json",
+  "title": "Skiller SourceSnapshot",
+  "description": "Resolved source provenance consumed by observe/plan/apply. Apply never consumes raw URLs or shorthand specs directly.",
+  "$defs": {
+    "source_kind": {
+      "enum": ["file", "git", "http-file", "http-archive"]
+    },
+    "source_status": {
+      "enum": ["refreshed", "cached", "cached-unverified", "offline"]
+    },
+    "ownership_class": {
+      "enum": [
+        "absent",
+        "ours-symlink",
+        "ours-copy",
+        "ours-legacy",
+        "foreign-known",
+        "foreign-unmanaged",
+        "satisfied-by-foreign",
+        "partially-satisfied"
+      ]
+    },
+    "conflict_resolution": {
+      "enum": ["block", "prompt", "skip", "adopt-existing", "replace-owned", "rename", "force-replace"]
+    },
+    "result_status": {
+      "enum": ["installed", "updated", "removed", "skipped", "dry-run", "failed", "not-installed", "blocked", "stale", "modified"]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "source_kind",
+    "original_spec",
+    "canonical_uri",
+    "source_key",
+    "source_status",
+    "local_cache_path"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "source_kind": { "$ref": "#/$defs/source_kind" },
+    "original_spec": {
+      "description": "Verbatim operator or manifest source string.",
+      "type": "string",
+      "minLength": 1
+    },
+    "canonical_uri": {
+      "description": "Normalized identity for dedupe and update.",
+      "type": "string",
+      "minLength": 1
+    },
+    "source_key": {
+      "description": "Stable cache/ledger key over canonical origin + subdir + requested ref selector, excluding resolved_revision.",
+      "type": "string",
+      "minLength": 1
+    },
+    "subdir": { "type": "string" },
+    "pinned_ref": { "type": "string" },
+    "requested_checksum": { "type": "string" },
+    "resolved_revision": {
+      "description": "Git SHA, HTTP validator plus digest, or local digest material used for update checks.",
+      "type": "string"
+    },
+    "source_status": { "$ref": "#/$defs/source_status" },
+    "local_cache_path": {
+      "description": "Materialized path consumed by observe/plan/apply.",
+      "type": "string",
+      "minLength": 1
+    },
+    "source_realpath": { "type": "string" },
+    "source_digest": { "type": "string" },
+    "frontmatter_name": { "type": "string" },
+    "description": { "type": "string" },
+    "fetched_at": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,20 @@
+schema = "skiller-install.v1"
+owner = "clawdapus"
+namespace = "mostlydev"
+version = "0.21.0"
+default_mode = "copy"
+
+[[skills]]
+name = "clawdapus-cli"
+canonical_id = "mostlydev:clawdapus-cli"
+install_slug = "clawdapus-cli"
+source = "../sources/clawdapus"
+targets = ["agents", "claude-code"]
+mode = "copy"
+
+[[skills.target_dirs]]
+id = "desk-manager-runtime"
+path = ".claw-skills/desk-manager/skills"
+scope = "runtime"
+kind = "runtime"
+mode = "copy"

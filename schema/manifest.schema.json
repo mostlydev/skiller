@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/manifest.schema.json",
+  "title": "Skiller install manifest",
+  "description": "Tool-owned TOML manifest after decoding to JSON shape. The TOML file is the user-facing format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "owner"],
+  "properties": {
+    "schema": { "const": "skiller-install.v1" },
+    "owner": { "type": "string", "minLength": 1 },
+    "namespace": { "type": "string" },
+    "version": { "type": "string" },
+    "default_mode": { "enum": ["link", "copy"] },
+    "skills": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/skill" }
+    },
+    "extras": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/extra" }
+    }
+  },
+  "$defs": {
+    "source_spec": {
+      "description": "Local path, file:: path, Git/GitHub shorthand, web SKILL.md, or web archive with optional //subdir and ?ref= / ?checksum= selectors.",
+      "type": "string",
+      "minLength": 1
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "canonical_id": {
+          "description": "Stable namespace:name identity. Defaults to <namespace>:<name>.",
+          "type": "string"
+        },
+        "install_slug": {
+          "description": "Harness-visible directory name. Defaults to name.",
+          "type": "string"
+        },
+        "source": { "$ref": "#/$defs/source_spec" },
+        "targets": {
+          "description": "Named registry targets or harness aliases.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "mode": { "enum": ["link", "copy"] },
+        "target_dirs": {
+          "description": "Explicit host/runtime skill roots for current-tool compatibility and runtime materialization.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/target_dir" }
+        }
+      }
+    },
+    "target_dir": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "id": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 },
+        "scope": { "enum": ["host", "runtime"] },
+        "kind": { "enum": ["shared", "proprietary", "runtime"] },
+        "reader": { "type": "string" },
+        "mode": { "enum": ["link", "copy"] }
+      }
+    },
+    "extra": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "target"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "harness": { "type": "string" },
+        "source": { "$ref": "#/$defs/source_spec" },
+        "target": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["copy"] },
+        "owned_marker": { "type": "boolean" }
+      }
+    }
+  }
+}

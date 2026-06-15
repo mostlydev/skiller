@@ -1,0 +1,5 @@
+{
+  "name": "talking-stick-session",
+  "command": "tt",
+  "args": ["events", "--follow", "--json"]
+}

@@ -1,0 +1,13 @@
+schema = "skiller-source-registry.v1"
+
+[[sources]]
+host = "github.com"
+kind = "git"
+shorthand = "org-repo"
+web_normalizers = ["tree", "blob"]
+
+[[sources]]
+host = "gitlab.com"
+kind = "git"
+shorthand = "org-repo"
+web_normalizers = ["tree", "blob"]

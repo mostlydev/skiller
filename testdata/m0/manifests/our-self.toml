@@ -1,0 +1,13 @@
+schema = "skiller-install.v1"
+owner = "our-ai"
+namespace = "fluxinc"
+version = "0.4.0"
+default_mode = "link"
+
+[[skills]]
+name = "our"
+canonical_id = "fluxinc:our"
+install_slug = "our"
+source = "../sources/our"
+targets = ["claude-code", "codex", "opencode"]
+mode = "link"

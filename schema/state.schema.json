@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/state.schema.json",
+  "title": "Skiller persisted state ledger",
+  "description": "Small rebuildable JSON ledger guarded by state.json.lock. Target-local markers and realpaths remain authoritative for destructive safety.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sources", "skills", "installs", "extras", "conflicts"],
+  "properties": {
+    "schema": { "const": "skiller-state.v1" },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "skills": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/skill" }
+    },
+    "installs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/install" }
+    },
+    "extras": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/extra" }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/conflict" }
+    }
+  },
+  "$defs": {
+    "record_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_kind",
+        "original_spec",
+        "canonical_uri",
+        "source_key",
+        "source_status",
+        "local_cache_path"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/record_id" },
+        "owner": { "type": "string" },
+        "namespace": { "type": "string" },
+        "package_ref": { "type": "string" },
+        "version": { "type": "string" },
+        "source_kind": { "$ref": "source-snapshot.schema.json#/$defs/source_kind" },
+        "original_spec": { "type": "string" },
+        "canonical_uri": { "type": "string" },
+        "source_key": { "type": "string" },
+        "subdir": { "type": "string" },
+        "pinned_ref": { "type": "string" },
+        "requested_checksum": { "type": "string" },
+        "resolved_revision": { "type": "string" },
+        "source_status": { "$ref": "source-snapshot.schema.json#/$defs/source_status" },
+        "local_cache_path": { "type": "string" },
+        "source_realpath": { "type": "string" },
+        "source_digest": { "type": "string" },
+        "fetched_at": { "$ref": "#/$defs/timestamp" },
+        "discovered_at": { "$ref": "#/$defs/timestamp" },
+        "last_seen_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "canonical_id", "namespace", "name", "install_slug"],
+      "properties": {
+        "id": { "$ref": "#/$defs/record_id" },
+        "canonical_id": { "type": "string" },
+        "namespace": { "type": "string" },
+        "name": { "type": "string" },
+        "install_slug": { "type": "string" },
+        "frontmatter_name": { "type": "string" },
+        "source_id": { "type": "string" },
+        "description": { "type": "string" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "skill_id", "target_kind", "target_id", "target_path", "mode", "scope", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/record_id" },
+        "skill_id": { "type": "string" },
+        "target_kind": { "enum": ["shared", "proprietary", "runtime"] },
+        "target_id": { "type": "string" },
+        "target_path": { "type": "string" },
+        "mode": { "enum": ["link", "copy"] },
+        "scope": { "enum": ["host", "runtime"] },
+        "marker_path": { "type": "string" },
+        "installed_digest_at_install": { "type": "string" },
+        "source_digest_at_install": { "type": "string" },
+        "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },
+        "legacy_adapter": { "type": "string" },
+        "installed_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" },
+        "last_seen_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "extra": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_id", "extra_id", "target_path", "mode"],
+      "properties": {
+        "id": { "$ref": "#/$defs/record_id" },
+        "source_id": { "type": "string" },
+        "extra_id": { "type": "string" },
+        "target_path": { "type": "string" },
+        "mode": { "enum": ["copy"] },
+        "marker_path": { "type": "string" },
+        "installed_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" },
+        "last_seen_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "conflict": {
+      "$ref": "plan.schema.json#/$defs/conflict"
+    }
+  }
+}

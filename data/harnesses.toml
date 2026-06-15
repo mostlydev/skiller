@@ -1,0 +1,76 @@
+schema = "skiller-harness-registry.v1"
+
+[[harnesses]]
+id = "agents"
+kind = "shared"
+aliases = ["agents"]
+readers = ["codex", "antigravity", "grok", "opencode"]
+global_dir = "~/.agents/skills"
+project_dir = ".agents/skills"
+default_mode = "link"
+carries_extras = true
+
+[[harnesses]]
+id = "claude-code"
+kind = "proprietary"
+aliases = ["claude", "claude-code"]
+readers = ["claude-code"]
+global_dir = "~/.claude/skills"
+project_dir = ".claude/skills"
+env_home = "CLAUDE_CONFIG_DIR"
+detect_dirs = ["~/.claude"]
+default_mode = "link"
+carries_extras = true
+
+[[harnesses]]
+id = "codex"
+kind = "shared-reader"
+aliases = ["codex"]
+readers = ["codex"]
+primary_target = "agents"
+global_dir = "~/.codex/skills"
+project_dir = ".codex/skills"
+env_home = "CODEX_HOME"
+detect_dirs = ["~/.codex"]
+duplicate_dirs = ["~/.codex/skills"]
+default_mode = "link"
+carries_extras = false
+
+[[harnesses]]
+id = "antigravity"
+kind = "shared-reader"
+aliases = ["agy", "antigravity"]
+readers = ["antigravity"]
+primary_target = "agents"
+global_dir = "~/.agents/skills"
+project_dir = ".agents/skills"
+detect_dirs = ["~/.agents"]
+default_mode = "link"
+carries_extras = false
+
+[[harnesses]]
+id = "grok"
+kind = "shared-reader"
+aliases = ["grok", "grok-build"]
+readers = ["grok"]
+primary_target = "agents"
+global_dir = "~/.grok/skills"
+project_dir = ".grok/skills"
+env_home = "GROK_HOME"
+detect_dirs = ["~/.grok"]
+duplicate_dirs = ["~/.grok/skills"]
+default_mode = "link"
+carries_extras = false
+
+[[harnesses]]
+id = "opencode"
+kind = "shared-reader"
+aliases = ["opencode", "open-code"]
+readers = ["opencode"]
+primary_target = "agents"
+global_dir = "~/.config/opencode/skills"
+project_dir = ".opencode/skills"
+detect_dirs = ["~/.config/opencode", "~/.opencode"]
+duplicate_dirs = ["~/.config/opencode/skills", "~/.opencode/skills"]
+default_mode = "link"
+carries_extras = false

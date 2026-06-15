@@ -1,0 +1,21 @@
+schema = "skiller-marker-registry.v1"
+
+[[markers]]
+owner_label = "gnit"
+marker_file = ".gnit-skill-managed"
+class = "ours-legacy"
+
+[[markers]]
+owner_label = "our-ai"
+marker_file = ".our-managed.json"
+class = "ours-legacy"
+
+[[markers]]
+owner_label = "vercel-skills"
+ownership_test = "lockfile"
+class = "foreign"
+
+[[markers]]
+owner_label = "clawdapus"
+ownership_test = "clawdapus-global-marker"
+class = "foreign"
