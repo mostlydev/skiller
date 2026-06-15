@@ -1,0 +1,75 @@
+{
+  "schema": "skiller-plan.v1",
+  "operation": "plan",
+  "dry_run": true,
+  "inputs": {
+    "manifest_path": "<FIXTURES>/manifests/clawdapus-runtime.toml",
+    "home": "/skiller/golden/home",
+    "project": "/skiller/golden/project",
+    "namespace": "mostlydev",
+    "on_conflict": "block"
+  },
+  "sources": [
+    {
+      "id": "source-001",
+      "source_kind": "file",
+      "original_spec": "../sources/clawdapus",
+      "canonical_uri": "file://<FIXTURES>/sources/clawdapus",
+      "source_key": "file:<redacted>",
+      "source_status": "refreshed",
+      "local_cache_path": "<FIXTURES>/sources/clawdapus",
+      "source_realpath": "<FIXTURES>/sources/clawdapus",
+      "source_digest": "sha256:4ed5e1d1d06449aa5ccc1e85c6b346753eabc1adbbc34acbb56804947f6f1db1",
+      "frontmatter_name": "clawdapus-cli",
+      "description": "Operate Clawdapus agents, Clawfiles, and runtime skill dirs."
+    }
+  ],
+  "actions": [
+    {
+      "id": "act-2727cbcbe82cca20",
+      "action": "install-copy",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:clawdapus-cli",
+        "namespace": "mostlydev",
+        "name": "clawdapus-cli",
+        "install_slug": "clawdapus-cli",
+        "frontmatter_name": "clawdapus-cli",
+        "description": "Operate Clawdapus agents, Clawfiles, and runtime skill dirs.",
+        "requested_targets": [
+          "desk-manager-runtime"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "desk-manager-runtime",
+        "kind": "runtime",
+        "scope": "runtime",
+        "root": "/skiller/golden/project/.claw-skills/desk-manager/skills",
+        "path": "/skiller/golden/project/.claw-skills/desk-manager/skills/clawdapus-cli",
+        "requested_targets": [
+          "desk-manager-runtime"
+        ],
+        "lock_id": "target:d5d393a6d65ad0aa"
+      },
+      "mode": {
+        "requested": "copy",
+        "effective": "copy"
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/project/.claw-skills/desk-manager/skills/clawdapus-cli"
+      },
+      "planned_writes": [
+        {
+          "kind": "copy",
+          "path": "/skiller/golden/project/.claw-skills/desk-manager/skills/clawdapus-cli"
+        },
+        {
+          "kind": "marker",
+          "path": "/skiller/golden/project/.claw-skills/desk-manager/skills/clawdapus-cli/.skiller-install.json"
+        }
+      ]
+    }
+  ]
+}

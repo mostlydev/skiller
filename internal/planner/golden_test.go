@@ -30,13 +30,15 @@ func TestGoldenPlans(t *testing.T) {
 	cases := []struct {
 		name     string
 		manifest string
+		project  string
 	}{
-		{"talking-stick", "talking-stick.toml"},
-		{"our-self", "our-self.toml"},
-		{"our-manifest", "our-manifest.toml"},
-		{"gnit", "gnit.toml"},
-		{"clawdapus", "clawdapus.toml"},
-		{"namespace-collision", "namespace-collision.toml"},
+		{"talking-stick", "talking-stick.toml", ""},
+		{"our-self", "our-self.toml", ""},
+		{"our-manifest", "our-manifest.toml", ""},
+		{"gnit", "gnit.toml", ""},
+		{"clawdapus", "clawdapus.toml", ""},
+		{"clawdapus-runtime", "clawdapus-runtime.toml", "/skiller/golden/project"},
+		{"namespace-collision", "namespace-collision.toml", ""},
 	}
 
 	for _, env := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
@@ -57,7 +59,7 @@ func TestGoldenPlans(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			manifest := filepath.Join(fixturesAbs, "manifests", tc.manifest)
-			plan, err := Build(Options{ManifestPath: manifest, Home: home})
+			plan, err := Build(Options{ManifestPath: manifest, Home: home, Project: tc.project})
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}

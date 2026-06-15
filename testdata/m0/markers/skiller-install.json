@@ -1,0 +1,22 @@
+{
+  "schema": "skiller-install-marker.v1",
+  "installer": {
+    "name": "skiller",
+    "version": "0.1.0"
+  },
+  "owner": "talking-stick",
+  "namespace": "mostlydev",
+  "canonical_id": "mostlydev:talking-stick",
+  "name": "talking-stick",
+  "install_slug": "talking-stick",
+  "frontmatter_name": "talking-stick",
+  "mode": "copy",
+  "target_kind": "shared",
+  "scope": "host",
+  "source_realpath": "/example/source/talking-stick",
+  "source_key": "file:example",
+  "manifest_path": "/example/skiller.toml",
+  "installed_at": "2026-06-15T00:00:00Z",
+  "source_digest_at_install": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "installed_digest_at_install": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

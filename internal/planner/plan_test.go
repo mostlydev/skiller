@@ -114,7 +114,7 @@ func TestOwnedModifiedCopyBlocks(t *testing.T) {
 func TestRuntimeTargetDirDefaultsToCopy(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
-	manifest := filepath.Join(fixturePath(t, "manifests"), "clawdapus.toml")
+	manifest := filepath.Join(fixturePath(t, "manifests"), "clawdapus-runtime.toml")
 	plan, err := Build(Options{ManifestPath: manifest, Home: home, Project: project})
 	if err != nil {
 		t.Fatal(err)

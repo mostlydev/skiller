@@ -77,52 +77,6 @@
       ]
     },
     {
-      "id": "act-bee6597ce0ee2d38",
-      "action": "install-copy",
-      "status": "dry-run",
-      "skill": {
-        "canonical_id": "mostlydev:clawdapus-cli",
-        "namespace": "mostlydev",
-        "name": "clawdapus-cli",
-        "install_slug": "clawdapus-cli",
-        "frontmatter_name": "clawdapus-cli",
-        "description": "Operate Clawdapus agents, Clawfiles, and runtime skill dirs.",
-        "requested_targets": [
-          "desk-manager-runtime"
-        ]
-      },
-      "source_id": "source-001",
-      "target": {
-        "id": "desk-manager-runtime",
-        "kind": "runtime",
-        "scope": "runtime",
-        "root": "<FIXTURES>/manifests/.claw-skills/desk-manager/skills",
-        "path": "<FIXTURES>/manifests/.claw-skills/desk-manager/skills/clawdapus-cli",
-        "requested_targets": [
-          "desk-manager-runtime"
-        ],
-        "lock_id": "target:e196410774d30f1d"
-      },
-      "mode": {
-        "requested": "copy",
-        "effective": "copy"
-      },
-      "ownership": {
-        "class": "absent",
-        "path": "<FIXTURES>/manifests/.claw-skills/desk-manager/skills/clawdapus-cli"
-      },
-      "planned_writes": [
-        {
-          "kind": "copy",
-          "path": "<FIXTURES>/manifests/.claw-skills/desk-manager/skills/clawdapus-cli"
-        },
-        {
-          "kind": "marker",
-          "path": "<FIXTURES>/manifests/.claw-skills/desk-manager/skills/clawdapus-cli/.skiller-install.json"
-        }
-      ]
-    },
-    {
       "id": "act-d2382a409880e4c5",
       "action": "install-copy",
       "status": "dry-run",
