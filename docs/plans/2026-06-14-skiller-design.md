@@ -910,6 +910,11 @@ Gate:
 
 ### 11.6 Milestone 4 - distribution and bootstrap
 
+Status: **delivered in M4 implementation (2026-06-15)**. The release machinery,
+bootstrap contract, installer, `selfupdate`, version JSON, and experimental Go facade are
+merged and locally validated. A real tag/GitHub Release is intentionally left as an
+operator-controlled follow-up.
+
 Build:
 
 - GoReleaser static binaries, checksums, release notes, installer script, and
@@ -1133,6 +1138,24 @@ Gate:
 - **Accepted as-is (no doc change):** Gemini's endorsement of observe/plan/apply purity,
   data-driven `harnesses`/`markers`/`sources.toml`, explicit runtime target modes, the
   Gemini-CLI removal, and the M0→M5 milestone order — all already in the design.
+
+**M4 implementation decision log (Codex + Claude, 2026-06-15):**
+
+- **Release means machinery merged and locally validated.** Cutting the real tag/release is
+  an operator action; M4 adds GoReleaser config, release workflow, installer, and local
+  verification.
+- **Stable M4 contract is subprocess JSON.** `version --json`, `registry --json`, and
+  dry-run `plan --json` are the cross-language gate. `pkg/skiller` exists for Go adopters
+  but is explicitly experimental until M6/M7 validates it.
+- **No default network bootstrap.** Node/Go/Rust `ensure-skiller` references verify and
+  print by default; download/install requires explicit opt-in.
+- **Checksum verification is unsigned in M4.** `checksums.txt` protects against corruption
+  and unexpected artifact changes, not compromised release credentials. Signing/cosign is a
+  later extension.
+- **Passive update notices are deferred.** Only `skiller selfupdate --check` reports update
+  availability; normal commands stay network-silent and CI-clean.
+- **GoReleaser builds from local source.** `gomod.proxy: false` avoids proxy/tag races and
+  private-repo failures; revisit once skiller is publicly go-gettable.
 
 ## 13. Naming (decided)
 

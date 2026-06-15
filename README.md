@@ -12,9 +12,11 @@ It ships as a **single static Go binary** (plus an importable Go library core) s
 Go, Rust, and Node tools can all use it **without dragging a foreign runtime onto the
 host**.
 
-**Status:** M0 contract implementation is underway. The repository now has a Go CLI
-skeleton with `registry --json` and non-mutating `plan --json` over fixture manifests,
-embedded registry data, and JSON schema contracts. Read the design:
+**Status:** M4 distribution/bootstrap machinery is implemented and locally validated.
+The repository has the planner, writer, conflict resolver, version JSON contract,
+GoReleaser config, installer script, `selfupdate`, reference bootstrappers, and the
+experimental Go facade. No real tag/release has been cut yet; that remains an operator
+action. Read the design:
 [`docs/plans/2026-06-14-skiller-design.md`](docs/plans/2026-06-14-skiller-design.md).
 
 ## Why this exists
@@ -30,20 +32,45 @@ and the `SKILL.md` format, but each requires its own interpreter, so neither can
 shared dependency for a Go/Rust/Node fleet. `skiller` adopts the same open format and
 stays runtime-free.
 
-## Planned CLI
+## CLI
 
 ```
-skiller plan      --manifest skiller.toml --json      # dry-run; implemented for M0 fixtures
-skiller install   --manifest skiller.toml             # idempotent, atomic
-skiller status    --json                              # installed / drift / ownership
-skiller sync      --manifest skiller.toml             # re-link, refresh, prune stale
-skiller uninstall --manifest skiller.toml [--shared|--all]
-skiller registry  --json                              # the harness registry it uses
-skiller selfupdate
+skiller --version
+skiller version --json
+skiller registry --json
+skiller plan      --manifest skiller.toml --json
+skiller install   --manifest skiller.toml --json
+skiller status    --json [--manifest skiller.toml]
+skiller conflicts list    --json [--manifest skiller.toml]
+skiller conflicts resolve --manifest skiller.toml --json [--resolution ID=POLICY]
+skiller sync      --manifest skiller.toml --json
+skiller uninstall --manifest skiller.toml --json [--shared|--all]
+skiller cleanup-duplicates --manifest skiller.toml --json
+skiller state repair --manifest skiller.toml --json
+skiller selfupdate [--check] [--dry-run] [--json]
 ```
 
 It also supports an explicit `--target-dir … --scope runtime` mode for materialized /
 containerized runtimes (e.g. clawdapus mounting into OpenClaw or Hermes).
+
+## Distribution And Bootstrap
+
+Release builds are configured through `.goreleaser.yaml` for static darwin, linux, and
+windows binaries on amd64/arm64, plus `checksums.txt`.
+
+Installer script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/master/scripts/install.sh | sh
+```
+
+Reference `ensure-skiller` implementations live under `bootstrap/{node,go,rust}`. They
+verify an existing binary by running `skiller version --json` and print the installer
+command by default; downloading is opt-in only.
+
+Go consumers can use `github.com/mostlydev/skiller/pkg/skiller`, which is intentionally
+experimental until the first Go adopter cutover. Node and Rust consumers should treat the
+subprocess JSON contract as the stable M4 surface.
 
 ## Name
 
