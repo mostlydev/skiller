@@ -13,6 +13,7 @@ import (
 	"github.com/mostlydev/skiller/internal/planner"
 	"github.com/mostlydev/skiller/pkg/install"
 	planpkg "github.com/mostlydev/skiller/pkg/plan"
+	"github.com/mostlydev/skiller/pkg/version"
 )
 
 func Run(args []string, stdout, stderr io.Writer) error {
@@ -20,6 +21,11 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return usage(stderr)
 	}
 	switch args[0] {
+	case "--version", "-V":
+		_, err := fmt.Fprintln(stdout, version.Get().String())
+		return err
+	case "version":
+		return runVersion(args[1:], stdout)
 	case "registry":
 		return runRegistry(args[1:], stdout)
 	case "plan":
@@ -43,6 +49,21 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runVersion(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller version", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	info := version.Get()
+	if *jsonOut {
+		return writeJSON(stdout, info)
+	}
+	_, err := fmt.Fprintln(stdout, info.String())
+	return err
 }
 
 func runRegistry(args []string, stdout io.Writer) error {
@@ -138,15 +159,16 @@ func runInstall(args []string, stdout io.Writer) error {
 		return writeJSON(stdout, plan)
 	}
 	result, err := app.Apply(context.Background(), app.ApplyOptions{
-		ManifestPath: *manifest,
-		Home:         *home,
-		Project:      *project,
-		Namespace:    *namespace,
-		InstallSlug:  *installSlug,
-		Force:        *force,
-		StateDir:     *stateDir,
-		OnConflict:   *onConflict,
-		LockTimeout:  *lockTimeout,
+		ManifestPath:     *manifest,
+		Home:             *home,
+		Project:          *project,
+		Namespace:        *namespace,
+		InstallSlug:      *installSlug,
+		Force:            *force,
+		StateDir:         *stateDir,
+		OnConflict:       *onConflict,
+		LockTimeout:      *lockTimeout,
+		InstallerVersion: version.Get().Version,
 	})
 	if err != nil {
 		return err
@@ -456,16 +478,17 @@ func runConflictsResolve(args []string, stdout io.Writer) error {
 		return fmt.Errorf("conflicts resolve requires --manifest")
 	}
 	result, err := app.Apply(context.Background(), app.ApplyOptions{
-		ManifestPath: *manifest,
-		Home:         *home,
-		Project:      *project,
-		Namespace:    *namespace,
-		InstallSlug:  installSlug,
-		Force:        *force,
-		Resolutions:  resolutions.Map(),
-		StateDir:     *stateDir,
-		OnConflict:   *onConflict,
-		LockTimeout:  *lockTimeout,
+		ManifestPath:     *manifest,
+		Home:             *home,
+		Project:          *project,
+		Namespace:        *namespace,
+		InstallSlug:      installSlug,
+		Force:            *force,
+		Resolutions:      resolutions.Map(),
+		StateDir:         *stateDir,
+		OnConflict:       *onConflict,
+		LockTimeout:      *lockTimeout,
+		InstallerVersion: version.Get().Version,
 	})
 	if err != nil {
 		return err
@@ -529,6 +552,8 @@ func runStateRepair(args []string, stdout io.Writer) error {
 func usage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, `Usage:
   skiller registry --json
+  skiller --version
+  skiller version [--json]
   skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--install-slug SLUG] [--force]
   skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--install-slug SLUG] [--force] [--lock-timeout DURATION]
   skiller uninstall --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]

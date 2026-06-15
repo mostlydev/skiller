@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/version.schema.json",
+  "title": "Skiller version JSON",
+  "description": "Machine-readable build identity returned by `skiller version --json` for bootstrappers and CI gates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "commit",
+    "date",
+    "built_by",
+    "dirty",
+    "source",
+    "go_version",
+    "platform"
+  ],
+  "properties": {
+    "schema": { "const": "skiller-version.v1" },
+    "version": {
+      "description": "Semantic version or development/build-info fallback.",
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": { "type": "string" },
+    "date": { "type": "string" },
+    "built_by": { "type": "string" },
+    "dirty": { "type": "boolean" },
+    "source": {
+      "description": "Where the version value came from.",
+      "enum": ["ldflags", "build-info", "dev"]
+    },
+    "go_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platform": {
+      "type": "string",
+      "pattern": "^[^/]+/[^/]+$"
+    }
+  }
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/mostlydev/skiller/pkg/install"
 	statepkg "github.com/mostlydev/skiller/pkg/state"
 	statuspkg "github.com/mostlydev/skiller/pkg/status"
+	"github.com/mostlydev/skiller/pkg/version"
 )
 
 func TestInstallDryRunMatchesPlan(t *testing.T) {
@@ -211,6 +212,39 @@ func TestStateRepairWritesStateLedger(t *testing.T) {
 	}
 	if len(ledger.Installs) != 1 || ledger.Installs[0].Status != "installed" {
 		t.Fatalf("installs = %#v, want one repaired installed target", ledger.Installs)
+	}
+}
+
+func TestInstallWritesCLIVersionToMarker(t *testing.T) {
+	oldVersion, oldCommit, oldDate, oldBuiltBy := version.Version, version.Commit, version.Date, version.BuiltBy
+	defer func() {
+		version.Version, version.Commit, version.Date, version.BuiltBy = oldVersion, oldCommit, oldDate, oldBuiltBy
+	}()
+	version.Version, version.Commit, version.Date, version.BuiltBy = "1.2.3-test", "", "", ""
+
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	var stdout bytes.Buffer
+	if err := Run([]string{"install", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli", ".skiller-install.json")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker struct {
+		Installer struct {
+			Version string `json:"version"`
+		} `json:"installer"`
+	}
+	if err := json.Unmarshal(data, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker.Installer.Version != "1.2.3-test" {
+		t.Fatalf("marker installer version = %q, want 1.2.3-test\n%s", marker.Installer.Version, data)
 	}
 }
 
