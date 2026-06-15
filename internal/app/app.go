@@ -1,11 +1,16 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/mostlydev/skiller/internal/contract"
+	"github.com/mostlydev/skiller/internal/fsutil"
+	"github.com/mostlydev/skiller/internal/lock"
+	"github.com/mostlydev/skiller/pkg/install"
 	"github.com/mostlydev/skiller/pkg/manifest"
 	"github.com/mostlydev/skiller/pkg/observe"
 	planpkg "github.com/mostlydev/skiller/pkg/plan"
@@ -26,72 +31,87 @@ type StatusOptions struct {
 	StateDir     string
 }
 
+type ApplyOptions struct {
+	ManifestPath     string
+	Home             string
+	Project          string
+	Namespace        string
+	StateDir         string
+	OnConflict       string
+	LockTimeout      time.Duration
+	InstallerVersion string
+}
+
+type preparedPlan struct {
+	Manifest        manifest.Manifest
+	Catalog         registry.Catalog
+	Sources         []source.Snapshot
+	SourcesBySpec   map[string]source.Snapshot
+	Candidates      []target.Candidate
+	ExtraCandidates []target.ExtraCandidate
+	Options         Options
+}
+
 func Plan(opts Options) (contract.Plan, error) {
-	if opts.OnConflict == "" {
-		opts.OnConflict = "block"
-	}
-	reg, err := registry.Load()
+	prepared, err := preparePlan(opts)
 	if err != nil {
 		return contract.Plan{}, err
 	}
-	m, err := manifest.Load(opts.ManifestPath)
-	if err != nil {
-		return contract.Plan{}, err
+	world := observePrepared(prepared)
+	return buildPreparedPlan(prepared, world), nil
+}
+
+func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
+	onConflict := opts.OnConflict
+	if onConflict == "" {
+		onConflict = "block"
 	}
-	absManifest, err := filepath.Abs(opts.ManifestPath)
-	if err != nil {
-		return contract.Plan{}, err
-	}
-	opts.ManifestPath = absManifest
-	home, err := resolveHome(opts.Home)
-	if err != nil {
-		return contract.Plan{}, err
-	}
-	opts.Home = home
-	if opts.Project != "" {
-		if opts.Project, err = filepath.Abs(opts.Project); err != nil {
-			return contract.Plan{}, err
-		}
-	}
-	manifestDir := filepath.Dir(absManifest)
-	sources, bySpec, err := source.ResolveAll(m, source.Options{
-		ManifestDir: manifestDir,
-		Home:        opts.Home,
-	})
-	if err != nil {
-		return contract.Plan{}, err
-	}
-	candidates, err := target.Resolve(m, reg, target.Options{
-		Home:        opts.Home,
-		Project:     opts.Project,
-		ManifestDir: manifestDir,
-		EnvHomes:    envHomes(reg),
-	})
-	if err != nil {
-		return contract.Plan{}, err
-	}
-	extraCandidates, err := target.ResolveExtras(m, target.Options{
-		Home:        opts.Home,
-		Project:     opts.Project,
-		ManifestDir: manifestDir,
-	})
-	if err != nil {
-		return contract.Plan{}, err
-	}
-	world := observe.Observe(candidates, reg, observe.Options{
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
 		Home:         opts.Home,
-		ExtraTargets: extraTargets(extraCandidates),
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   onConflict,
 	})
-	return planpkg.Build(planpkg.Inputs{
-		Manifest:        m,
-		Catalog:         reg,
-		Sources:         sources,
-		SourcesBySpec:   bySpec,
-		Candidates:      candidates,
-		ExtraCandidates: extraCandidates,
-		World:           world,
-		Options:         opts,
-	}), nil
+	if err != nil {
+		return install.Result{}, err
+	}
+	stateDir, err := state.ResolveDir(opts.StateDir)
+	if err != nil {
+		return install.Result{}, err
+	}
+	manager := lock.NewManager(stateDir)
+	if opts.LockTimeout > 0 {
+		manager = manager.WithTimeout(opts.LockTimeout)
+	}
+	locks, err := manager.AcquireTargets(ctx, applyLockIDs(prepared))
+	if err != nil {
+		return install.Result{}, err
+	}
+	defer locks.Release()
+	if err := sweepOrphans(prepared); err != nil {
+		return install.Result{}, err
+	}
+	world := observePrepared(prepared)
+	plan := buildPreparedPlan(prepared, world)
+	planpkg.Sort(&plan)
+	result, err := install.Apply(plan, install.Options{
+		Owner:        prepared.Manifest.Owner,
+		Namespace:    firstNonEmpty(prepared.Manifest.Namespace, prepared.Manifest.Owner),
+		ManifestPath: prepared.Options.ManifestPath,
+		Version:      firstNonEmpty(opts.InstallerVersion, "dev"),
+		FS:           fsutil.Options{},
+	})
+	if err != nil {
+		return install.Result{}, err
+	}
+	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
+		applyLedgerUpdates(ledger, plan, result)
+		return nil
+	}); err != nil {
+		return install.Result{}, err
+	}
+	return result, nil
 }
 
 func Status(opts StatusOptions) (status.Report, error) {
@@ -144,6 +164,89 @@ func Conflicts(opts StatusOptions) (status.ConflictReport, error) {
 	return status.Conflicts(planned, stateLoad.Ledger, stateLoad.Diagnostics), nil
 }
 
+func preparePlan(opts Options) (preparedPlan, error) {
+	if opts.OnConflict == "" {
+		opts.OnConflict = "block"
+	}
+	reg, err := registry.Load()
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	m, err := manifest.Load(opts.ManifestPath)
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	absManifest, err := filepath.Abs(opts.ManifestPath)
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	opts.ManifestPath = absManifest
+	home, err := resolveHome(opts.Home)
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	opts.Home = home
+	if opts.Project != "" {
+		if opts.Project, err = filepath.Abs(opts.Project); err != nil {
+			return preparedPlan{}, err
+		}
+	}
+	manifestDir := filepath.Dir(absManifest)
+	sources, bySpec, err := source.ResolveAll(m, source.Options{
+		ManifestDir: manifestDir,
+		Home:        opts.Home,
+	})
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	candidates, err := target.Resolve(m, reg, target.Options{
+		Home:        opts.Home,
+		Project:     opts.Project,
+		ManifestDir: manifestDir,
+		EnvHomes:    envHomes(reg),
+	})
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	extraCandidates, err := target.ResolveExtras(m, target.Options{
+		Home:        opts.Home,
+		Project:     opts.Project,
+		ManifestDir: manifestDir,
+	})
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	return preparedPlan{
+		Manifest:        m,
+		Catalog:         reg,
+		Sources:         sources,
+		SourcesBySpec:   bySpec,
+		Candidates:      candidates,
+		ExtraCandidates: extraCandidates,
+		Options:         opts,
+	}, nil
+}
+
+func observePrepared(prepared preparedPlan) observe.WorldState {
+	return observe.Observe(prepared.Candidates, prepared.Catalog, observe.Options{
+		Home:         prepared.Options.Home,
+		ExtraTargets: extraTargets(prepared.ExtraCandidates),
+	})
+}
+
+func buildPreparedPlan(prepared preparedPlan, world observe.WorldState) contract.Plan {
+	return planpkg.Build(planpkg.Inputs{
+		Manifest:        prepared.Manifest,
+		Catalog:         prepared.Catalog,
+		Sources:         prepared.Sources,
+		SourcesBySpec:   prepared.SourcesBySpec,
+		Candidates:      prepared.Candidates,
+		ExtraCandidates: prepared.ExtraCandidates,
+		World:           world,
+		Options:         prepared.Options,
+	})
+}
+
 func resolveHome(home string) (string, error) {
 	if home == "" {
 		return os.UserHomeDir()
@@ -170,6 +273,172 @@ func extraTargets(candidates []target.ExtraCandidate) []target.Ref {
 		out = append(out, candidate.Target)
 	}
 	return out
+}
+
+func applyLockIDs(prepared preparedPlan) []string {
+	var ids []string
+	for _, candidate := range prepared.Candidates {
+		ids = append(ids, candidate.Target.LockID)
+		for _, duplicate := range candidate.Duplicates {
+			ids = append(ids, duplicate.LockID)
+		}
+	}
+	for _, candidate := range prepared.ExtraCandidates {
+		ids = append(ids, candidate.Target.LockID)
+	}
+	return lock.SortedUnique(ids)
+}
+
+func sweepOrphans(prepared preparedPlan) error {
+	parents := map[string]bool{}
+	for _, candidate := range prepared.Candidates {
+		parents[filepath.Dir(candidate.Target.Path)] = true
+		for _, duplicate := range candidate.Duplicates {
+			parents[filepath.Dir(duplicate.Path)] = true
+		}
+	}
+	for _, candidate := range prepared.ExtraCandidates {
+		parents[filepath.Dir(candidate.Target.Path)] = true
+	}
+	for parent := range parents {
+		if err := fsutil.SweepOrphans(parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install.Result) {
+	for _, source := range plan.Sources {
+		upsertSource(ledger, source)
+	}
+	for _, action := range result.Actions {
+		switch action.Status {
+		case "installed", "updated":
+			if action.Skill != nil {
+				upsertSkill(ledger, *action.Skill)
+				upsertInstall(ledger, action)
+			}
+			if action.Extra != nil {
+				upsertExtra(ledger, action)
+			}
+		case "blocked":
+			for _, conflict := range result.Conflicts {
+				upsertConflict(ledger, conflict)
+			}
+		}
+	}
+}
+
+func upsertSource(ledger *state.Ledger, source contract.SourceSnapshot) {
+	record := state.SourceRecord{
+		ID:                source.ID,
+		SourceKind:        source.SourceKind,
+		OriginalSpec:      source.OriginalSpec,
+		CanonicalURI:      source.CanonicalURI,
+		SourceKey:         source.SourceKey,
+		Subdir:            source.Subdir,
+		PinnedRef:         source.PinnedRef,
+		RequestedChecksum: source.RequestedChecksum,
+		ResolvedRevision:  source.ResolvedRevision,
+		SourceStatus:      source.SourceStatus,
+		LocalCachePath:    source.LocalCachePath,
+		SourceRealpath:    source.SourceRealpath,
+		SourceDigest:      source.SourceDigest,
+	}
+	for i := range ledger.Sources {
+		if ledger.Sources[i].ID == record.ID {
+			ledger.Sources[i] = record
+			return
+		}
+	}
+	ledger.Sources = append(ledger.Sources, record)
+}
+
+func upsertSkill(ledger *state.Ledger, skill contract.PlanSkill) {
+	record := state.SkillRecord{
+		ID:              "skill:" + skill.CanonicalID,
+		CanonicalID:     skill.CanonicalID,
+		Namespace:       skill.Namespace,
+		Name:            skill.Name,
+		InstallSlug:     skill.InstallSlug,
+		FrontmatterName: skill.FrontmatterName,
+		Description:     skill.Description,
+	}
+	for i := range ledger.Skills {
+		if ledger.Skills[i].ID == record.ID {
+			ledger.Skills[i] = record
+			return
+		}
+	}
+	ledger.Skills = append(ledger.Skills, record)
+}
+
+func upsertInstall(ledger *state.Ledger, action install.ActionResult) {
+	record := state.InstallRecord{
+		ID:         "install:" + action.ID,
+		SkillID:    "skill:" + action.Skill.CanonicalID,
+		TargetKind: action.Target.Kind,
+		TargetID:   action.Target.ID,
+		TargetPath: action.Target.Path,
+		Mode:       firstNonEmpty(action.EffectiveMode, action.RequestedMode, "copy"),
+		Scope:      action.Target.Scope,
+		MarkerPath: markerPath(action),
+		Status:     action.Status,
+		LastSeenAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	for i := range ledger.Installs {
+		if ledger.Installs[i].ID == record.ID {
+			ledger.Installs[i] = record
+			return
+		}
+	}
+	ledger.Installs = append(ledger.Installs, record)
+}
+
+func upsertExtra(ledger *state.Ledger, action install.ActionResult) {
+	record := state.ExtraRecord{
+		ID:         "extra:" + action.ID,
+		SourceID:   "",
+		ExtraID:    action.Extra.ID,
+		TargetPath: action.Target.Path,
+		Mode:       "copy",
+		MarkerPath: action.Target.Path + ".skiller-install.json",
+		LastSeenAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	for i := range ledger.Extras {
+		if ledger.Extras[i].ID == record.ID {
+			ledger.Extras[i] = record
+			return
+		}
+	}
+	ledger.Extras = append(ledger.Extras, record)
+}
+
+func upsertConflict(ledger *state.Ledger, conflict contract.PlanConflict) {
+	for i := range ledger.Conflicts {
+		if ledger.Conflicts[i].ID == conflict.ID {
+			ledger.Conflicts[i] = conflict
+			return
+		}
+	}
+	ledger.Conflicts = append(ledger.Conflicts, conflict)
+}
+
+func markerPath(action install.ActionResult) string {
+	if action.EffectiveMode == "copy" {
+		return filepath.Join(action.Target.Path, ".skiller-install.json")
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func ValidateOptions(opts Options) error {

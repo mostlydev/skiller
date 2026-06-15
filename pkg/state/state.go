@@ -2,14 +2,17 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/mostlydev/skiller/internal/contract"
+	"github.com/mostlydev/skiller/internal/lock"
 	"github.com/mostlydev/skiller/internal/schemajson"
 )
 
@@ -95,6 +98,11 @@ type LoadResult struct {
 	RebuildRecommended bool
 }
 
+type CommitOptions struct {
+	Dir         string
+	LockTimeout time.Duration
+}
+
 func Load(dir string) (LoadResult, error) {
 	resolved, err := ResolveDir(dir)
 	if err != nil {
@@ -119,6 +127,53 @@ func Load(dir string) (LoadResult, error) {
 	}
 	normalize(&ledger)
 	return LoadResult{Ledger: ledger, Path: path}, nil
+}
+
+func Commit(ctx context.Context, opts CommitOptions, mutate func(*Ledger) error) error {
+	resolved, err := ResolveDir(opts.Dir)
+	if err != nil {
+		return err
+	}
+	manager := lock.NewManager(resolved)
+	if opts.LockTimeout > 0 {
+		manager = manager.WithTimeout(opts.LockTimeout)
+	}
+	held, err := manager.AcquireState(ctx)
+	if err != nil {
+		return err
+	}
+	defer held.Release()
+	loaded, err := Load(resolved)
+	if err != nil {
+		return err
+	}
+	ledger := loaded.Ledger
+	if mutate != nil {
+		if err := mutate(&ledger); err != nil {
+			return err
+		}
+	}
+	normalize(&ledger)
+	data, err := json.MarshalIndent(ledger, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := schemajson.Validate("state.schema.json", data); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(resolved, 0o755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(resolved, "state.json.tmp")
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(resolved, "state.json")); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func Empty() Ledger {

@@ -1,10 +1,15 @@
 package state
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mostlydev/skiller/internal/contract"
 )
 
 func TestLoadCorruptLedgerReturnsEmptyWithRebuildHint(t *testing.T) {
@@ -46,5 +51,43 @@ func TestLoadValidLedger(t *testing.T) {
 	}
 	if result.RebuildRecommended || len(result.Diagnostics) != 0 {
 		t.Fatalf("unexpected rebuild diagnostics: %#v", result)
+	}
+}
+
+func TestCommitWritesValidatedLedger(t *testing.T) {
+	dir := t.TempDir()
+	err := Commit(context.Background(), CommitOptions{Dir: dir, LockTimeout: time.Second}, func(ledger *Ledger) error {
+		ledger.Conflicts = append(ledger.Conflicts, conflictRecord())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Conflicts) != 1 || loaded.Ledger.Conflicts[0].ID != "conflict-001" {
+		t.Fatalf("ledger conflicts = %#v", loaded.Ledger.Conflicts)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func conflictRecord() contract.PlanConflict {
+	return contract.PlanConflict{
+		ID:                 "conflict-001",
+		TargetKind:         "shared",
+		TargetID:           "agents",
+		EffectiveName:      "demo",
+		DesiredCanonicalID: "test:demo",
+		Status:             "foreign-target",
+		SafeChoices:        []string{"block"},
 	}
 }

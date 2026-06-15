@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/mostlydev/skiller/internal/app"
 	"github.com/mostlydev/skiller/internal/planner"
@@ -19,6 +21,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runRegistry(args[1:], stdout)
 	case "plan":
 		return runPlan(args[1:], stdout)
+	case "install":
+		return runInstall(args[1:], stdout)
 	case "status":
 		return runStatus(args[1:], stdout)
 	case "conflicts":
@@ -77,6 +81,56 @@ func runPlan(args []string, stdout io.Writer) error {
 	}
 	planner.SortPlan(&plan)
 	return writeJSON(stdout, plan)
+}
+
+func runInstall(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller install", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
+	dryRun := fs.Bool("dry-run", false, "return plan without writes")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("install currently requires --json")
+	}
+	if *manifest == "" {
+		return fmt.Errorf("install requires --manifest")
+	}
+	if *dryRun {
+		plan, err := planner.Build(planner.Options{
+			ManifestPath: *manifest,
+			Home:         *home,
+			Project:      *project,
+			Namespace:    *namespace,
+			OnConflict:   *onConflict,
+		})
+		if err != nil {
+			return err
+		}
+		planner.SortPlan(&plan)
+		return writeJSON(stdout, plan)
+	}
+	result, err := app.Apply(context.Background(), app.ApplyOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		StateDir:     *stateDir,
+		OnConflict:   *onConflict,
+		LockTimeout:  *lockTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, result)
 }
 
 func runStatus(args []string, stdout io.Writer) error {
@@ -151,6 +205,7 @@ func usage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, `Usage:
   skiller registry --json
   skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]
+  skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]`)
 	return err
