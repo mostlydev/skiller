@@ -10,7 +10,7 @@ const EXIT_EXEC: i32 = 13;
 const EXIT_INSTALL: i32 = 20;
 const DEFAULT_MIN_VERSION: &str = "0.0.0";
 const DEFAULT_INSTALL_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/main/scripts/install.sh | sh";
+    "curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/master/scripts/install.sh | sh";
 
 struct Options {
     min_version: String,

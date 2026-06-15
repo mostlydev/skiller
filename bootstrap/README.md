@@ -36,7 +36,7 @@ does not. The default path does not touch the network.
 Default install command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/master/scripts/install.sh | sh
 ```
 
 The installer script lands later in M4; until then consumers should override the install

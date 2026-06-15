@@ -11,7 +11,7 @@ const EXIT_EXEC = 13;
 const EXIT_INSTALL = 20;
 const DEFAULT_MIN_VERSION = "0.0.0";
 const DEFAULT_INSTALL_COMMAND =
-  "curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/main/scripts/install.sh | sh";
+  "curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/master/scripts/install.sh | sh";
 
 function main() {
   const opts = parseArgs(process.argv.slice(2), process.env);

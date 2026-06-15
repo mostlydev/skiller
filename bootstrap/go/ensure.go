@@ -21,7 +21,7 @@ const (
 	exitInstall = 20
 
 	defaultMinVersion     = "0.0.0"
-	defaultInstallCommand = "curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/main/scripts/install.sh | sh"
+	defaultInstallCommand = "curl -fsSL https://raw.githubusercontent.com/mostlydev/skiller/master/scripts/install.sh | sh"
 )
 
 type options struct {
