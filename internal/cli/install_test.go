@@ -165,3 +165,40 @@ func TestCleanupDuplicatesRemovesManagedSymlink(t *testing.T) {
 		t.Fatalf("managed duplicate should be removed, stat err=%v", err)
 	}
 }
+
+func TestSyncDryRunAndPrune(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	if err := Run([]string{"install", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	emptyManifest := filepath.Join(t.TempDir(), "empty.toml")
+	if err := os.WriteFile(emptyManifest, []byte("schema = \"skiller-install.v1\"\nowner = \"clawdapus\"\nnamespace = \"mostlydev\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+
+	var dryRunOut bytes.Buffer
+	if err := Run([]string{"sync", "--manifest", emptyManifest, "--home", home, "--project", project, "--state-dir", stateDir, "--dry-run", "--json"}, &dryRunOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("sync --dry-run: %v", err)
+	}
+	if err := schemajson.Validate("plan.schema.json", dryRunOut.Bytes()); err != nil {
+		t.Fatalf("sync dry-run plan schema: %v\n%s", err, dryRunOut.String())
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("sync dry-run should preserve target: %v", err)
+	}
+
+	var syncOut bytes.Buffer
+	if err := Run([]string{"sync", "--manifest", emptyManifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &syncOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := schemajson.Validate("apply-result.schema.json", syncOut.Bytes()); err != nil {
+		t.Fatalf("sync result schema: %v\n%s", err, syncOut.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("sync should remove stale marker-owned target, stat err=%v", err)
+	}
+}

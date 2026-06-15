@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mostlydev/skiller/internal/contract"
 	"github.com/mostlydev/skiller/internal/fsutil"
+	"github.com/mostlydev/skiller/internal/hashid"
 	"github.com/mostlydev/skiller/internal/lock"
 	"github.com/mostlydev/skiller/pkg/install"
 	"github.com/mostlydev/skiller/pkg/manifest"
@@ -76,6 +78,19 @@ type CleanupOptions struct {
 	LockTimeout  time.Duration
 }
 
+type SyncOptions struct {
+	ManifestPath string
+	Home         string
+	Project      string
+	Namespace    string
+	StateDir     string
+	OnConflict   string
+	LockTimeout  time.Duration
+	Shared       bool
+	All          bool
+	Force        bool
+}
+
 type preparedPlan struct {
 	Manifest        manifest.Manifest
 	Catalog         registry.Catalog
@@ -133,6 +148,14 @@ func PlanCleanupDuplicates(opts CleanupOptions) (contract.Plan, error) {
 	return plan, nil
 }
 
+func PlanSync(opts SyncOptions) (contract.Plan, error) {
+	prepared, desired, loaded, err := prepareSync(opts)
+	if err != nil {
+		return contract.Plan{}, err
+	}
+	return syncPlan(prepared, desired, loaded.Ledger, opts), nil
+}
+
 func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 	onConflict := opts.OnConflict
 	if onConflict == "" {
@@ -179,6 +202,46 @@ func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 	}
 	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
 		applyLedgerUpdates(ledger, plan, result)
+		return nil
+	}); err != nil {
+		return install.Result{}, err
+	}
+	return result, nil
+}
+
+func Sync(ctx context.Context, opts SyncOptions) (install.Result, error) {
+	prepared, desired, loaded, err := prepareSync(opts)
+	if err != nil {
+		return install.Result{}, err
+	}
+	stateDir, err := state.ResolveDir(opts.StateDir)
+	if err != nil {
+		return install.Result{}, err
+	}
+	manager := lock.NewManager(stateDir)
+	if opts.LockTimeout > 0 {
+		manager = manager.WithTimeout(opts.LockTimeout)
+	}
+	locks, err := manager.AcquireTargets(ctx, syncLockIDs(prepared, loaded.Ledger))
+	if err != nil {
+		return install.Result{}, err
+	}
+	defer locks.Release()
+	loaded, err = state.Load(stateDir)
+	if err != nil {
+		return install.Result{}, err
+	}
+	plan := syncPlan(prepared, desired, loaded.Ledger, opts)
+	result, err := install.Uninstall(plan, install.UninstallOptions{
+		Owner:        prepared.Manifest.Owner,
+		RemoveShared: opts.Shared || opts.All,
+		Force:        opts.Force,
+	})
+	if err != nil {
+		return install.Result{}, err
+	}
+	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
+		applyUninstallLedgerUpdates(ledger, result)
 		return nil
 	}); err != nil {
 		return install.Result{}, err
@@ -447,6 +510,27 @@ func buildPreparedPlan(prepared preparedPlan, world observe.WorldState) contract
 	})
 }
 
+func prepareSync(opts SyncOptions) (preparedPlan, contract.Plan, state.LoadResult, error) {
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
+		Home:         opts.Home,
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   firstNonEmpty(opts.OnConflict, "block"),
+	})
+	if err != nil {
+		return preparedPlan{}, contract.Plan{}, state.LoadResult{}, err
+	}
+	world := observePrepared(prepared)
+	desired := buildPreparedPlan(prepared, world)
+	planpkg.Sort(&desired)
+	loaded, err := state.Load(opts.StateDir)
+	if err != nil {
+		return preparedPlan{}, contract.Plan{}, state.LoadResult{}, err
+	}
+	return prepared, desired, loaded, nil
+}
+
 func baseOperationPlan(prepared preparedPlan, operation string) contract.Plan {
 	return contract.Plan{
 		Schema:    "skiller-plan.v1",
@@ -464,6 +548,77 @@ func baseOperationPlan(prepared preparedPlan, operation string) contract.Plan {
 		Conflicts:   []contract.PlanConflict{},
 		Diagnostics: []contract.Diagnostic{},
 	}
+}
+
+func syncPlan(prepared preparedPlan, desired contract.Plan, ledger state.Ledger, opts SyncOptions) contract.Plan {
+	plan := baseOperationPlan(prepared, "sync")
+	desiredIDs := map[string]bool{}
+	for _, action := range desired.Actions {
+		if action.Skill != nil {
+			desiredIDs["install:"+action.ID] = true
+		}
+	}
+	skills := map[string]state.SkillRecord{}
+	for _, skill := range ledger.Skills {
+		skills[skill.ID] = skill
+	}
+	for _, record := range ledger.Installs {
+		if desiredIDs[record.ID] {
+			continue
+		}
+		action := syncPruneAction(record, skills[record.SkillID], opts)
+		plan.Actions = append(plan.Actions, action)
+	}
+	planpkg.Sort(&plan)
+	return plan
+}
+
+func syncPruneAction(record state.InstallRecord, skill state.SkillRecord, opts SyncOptions) contract.PlanAction {
+	actionID := strings.TrimPrefix(record.ID, "install:")
+	if actionID == record.ID {
+		actionID = "sync:" + hashid.Short(record.ID+"\x00"+record.TargetPath)
+	}
+	targetRef := targetFromInstall(record)
+	skillRef := contract.PlanSkill{
+		CanonicalID:     firstNonEmpty(skill.CanonicalID, record.SkillID),
+		Namespace:       skill.Namespace,
+		Name:            firstNonEmpty(skill.Name, skill.InstallSlug, record.SkillID),
+		InstallSlug:     firstNonEmpty(skill.InstallSlug, filepath.Base(record.TargetPath)),
+		FrontmatterName: skill.FrontmatterName,
+		Description:     skill.Description,
+	}
+	action := contract.PlanAction{
+		ID:     actionID,
+		Action: "remove-owned",
+		Status: "dry-run",
+		Skill:  &skillRef,
+		Target: targetRef,
+		Mode: contract.PlanMode{
+			Requested: firstNonEmpty(record.Mode, "copy"),
+			Effective: firstNonEmpty(record.Mode, "copy"),
+		},
+		Ownership: contract.ObservedOwnership{
+			Class:      "ours-copy",
+			Path:       record.TargetPath,
+			MarkerPath: record.MarkerPath,
+		},
+		PlannedWrites: []contract.PlannedWrite{{Kind: "remove", Path: record.TargetPath}},
+	}
+	if record.MarkerPath == "" || filepath.Base(record.MarkerPath) != ".skiller-install.json" {
+		action.Action = "skip-uninstall"
+		action.Status = "dry-run"
+		action.Reason = "sync prunes only skiller marker-owned copy installs"
+		action.PlannedWrites = nil
+		action.Ownership.Class = "foreign-unmanaged"
+		return action
+	}
+	if record.TargetKind == "shared" && !(opts.Shared || opts.All) {
+		action.Action = "skip-uninstall"
+		action.Status = "dry-run"
+		action.Reason = "shared target requires --shared or --all"
+		action.PlannedWrites = nil
+	}
+	return action
 }
 
 func uninstallPlan(prepared preparedPlan, observed contract.Plan, opts UninstallOptions) contract.Plan {
@@ -555,6 +710,30 @@ func applyLockIDs(prepared preparedPlan) []string {
 		ids = append(ids, candidate.Target.LockID)
 	}
 	return lock.SortedUnique(ids)
+}
+
+func syncLockIDs(prepared preparedPlan, ledger state.Ledger) []string {
+	ids := applyLockIDs(prepared)
+	for _, install := range ledger.Installs {
+		ids = append(ids, lockIDForRoot(filepath.Dir(install.TargetPath)))
+	}
+	return lock.SortedUnique(ids)
+}
+
+func lockIDForRoot(root string) string {
+	return "target:" + hashid.Short(filepath.Clean(root))
+}
+
+func targetFromInstall(install state.InstallRecord) contract.PlanTarget {
+	root := filepath.Dir(install.TargetPath)
+	return contract.PlanTarget{
+		ID:     install.TargetID,
+		Kind:   install.TargetKind,
+		Scope:  install.Scope,
+		Root:   root,
+		Path:   install.TargetPath,
+		LockID: lockIDForRoot(root),
+	}
 }
 
 func sweepOrphans(prepared preparedPlan) error {

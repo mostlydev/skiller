@@ -540,6 +540,65 @@ func TestCleanupDuplicatesRemovesOnlyManagedSymlinks(t *testing.T) {
 	}
 }
 
+func TestSyncPrunesUndeclaredMarkerOwnedCopy(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	if _, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+	emptyManifest := writeEmptyManifest(t, "clawdapus", "mostlydev")
+
+	plan, err := PlanSync(SyncOptions{
+		ManifestPath: emptyManifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Action != "remove-owned" || plan.Actions[0].Status != "dry-run" {
+		t.Fatalf("sync dry-run actions = %#v, want one remove-owned dry-run", plan.Actions)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("sync dry-run should preserve target: %v", err)
+	}
+
+	result, err := Sync(context.Background(), SyncOptions{
+		ManifestPath: emptyManifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Status != "removed" {
+		t.Fatalf("sync actions = %#v, want one removed stale install", result.Actions)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("sync should remove stale marker-owned target, stat err=%v", err)
+	}
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Installs) != 0 {
+		t.Fatalf("installs = %#v, want sync to remove stale install row", loaded.Ledger.Installs)
+	}
+}
+
 func TestM2RepresentativeManifestsApplyWithoutBlockedActions(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -608,6 +667,20 @@ func writeSingleSkillManifest(t *testing.T, name, canonicalID, installSlug, sour
 		"source = " + strconv.Quote(source) + "\n" +
 		"targets = [\"agents\"]\n" +
 		"mode = \"link\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeEmptyManifest(t *testing.T, owner, namespace string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "skiller.toml")
+	data := "schema = \"skiller-install.v1\"\n" +
+		"owner = " + strconv.Quote(owner) + "\n" +
+		"namespace = " + strconv.Quote(namespace) + "\n" +
+		"default_mode = \"link\"\n"
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
