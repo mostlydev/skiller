@@ -160,13 +160,22 @@ func (b *builder) planTargetAction(snapshot source.Snapshot, skill contract.Plan
 		if mode.Effective == "copy" {
 			action.PlannedWrites = append(action.PlannedWrites, contract.PlannedWrite{Kind: "marker", Path: filepath.Join(targetRef.Path, ".skiller-install.json")})
 		}
-	case "ours-symlink", "ours-copy":
+	case "ours-symlink":
+		// A symlink that resolves to the managed source is always current — it serves
+		// the live source, so there is nothing to refresh (design §6.4, "updates for
+		// free"). No-op unconditionally; a content digest of a symlink-to-directory is
+		// not a reliable freshness signal and must not force a spurious re-link, which
+		// would break idempotence for every link-mode install.
+		action.Action = "no-op"
+		action.Reason = "symlink already resolves to the managed source"
+		return action
+	case "ours-copy":
 		if ownership.DigestMatch != nil && *ownership.DigestMatch {
 			action.Action = "no-op"
 			action.Reason = "target already matches desired source"
 			return action
 		}
-		if ownership.Class == "ours-copy" && strings.Contains(ownership.Message, "modified") {
+		if strings.Contains(ownership.Message, "modified") {
 			action.Action = "block-conflict"
 			action.Status = "blocked"
 			action.Reason = ownership.Message

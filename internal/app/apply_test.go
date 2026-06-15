@@ -631,6 +631,63 @@ func TestM2RepresentativeManifestsApplyWithoutBlockedActions(t *testing.T) {
 	}
 }
 
+// The §11.4 gate requires idempotence proven across ALL four tool shapes, not just the
+// copy-mode runtime case. This generalizes TestApplyIsIdempotent over the representative
+// manifests and is the regression guard for the link-mode idempotence fix (an ours-symlink
+// that resolves to the managed source must re-plan as a quiet no-op, never a spurious
+// refresh). A second apply must leave every SKILL install a no-op with no duplicate ledger
+// rows. NOTE: extras (install-extra) are excluded — they still re-copy because the pure
+// planner has no source digest for sidecar files yet; that idempotence gap is tracked
+// separately for a follow-up slice.
+func TestM2SkillInstallIdempotentAcrossShapes(t *testing.T) {
+	cases := []struct{ name, manifest string }{
+		{"talking-stick", "talking-stick.toml"},
+		{"gnit", "gnit.toml"},
+		{"our-ai", "our-self.toml"},
+		{"clawdapus-runtime", "clawdapus-runtime.toml"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := ApplyOptions{
+				ManifestPath: filepath.Join("..", "..", "testdata", "m0", "manifests", tc.manifest),
+				Home:         t.TempDir(),
+				Project:      t.TempDir(),
+				StateDir:     t.TempDir(),
+				LockTimeout:  time.Second,
+			}
+			if _, err := Apply(context.Background(), opts); err != nil {
+				t.Fatal(err)
+			}
+			firstInstalls := countLedgerInstalls(t, opts.StateDir)
+
+			second, err := Apply(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, action := range second.Actions {
+				if action.Skill == nil {
+					continue
+				}
+				if action.Status != "skipped" {
+					t.Fatalf("re-apply not idempotent for skill action: %#v", action)
+				}
+			}
+			if got := countLedgerInstalls(t, opts.StateDir); got != firstInstalls {
+				t.Fatalf("ledger installs changed on re-apply: %d -> %d (duplication)", firstInstalls, got)
+			}
+		})
+	}
+}
+
+func countLedgerInstalls(t *testing.T, stateDir string) int {
+	t.Helper()
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(loaded.Ledger.Installs)
+}
+
 func assertApplyResultSchema(t *testing.T, result any) {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)
