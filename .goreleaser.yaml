@@ -1,0 +1,61 @@
+version: 2
+
+project_name: skiller
+
+gomod:
+  proxy: true
+
+builds:
+  - id: skiller
+    main: ./cmd/skiller
+    binary: skiller
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    tags:
+      - osusergo
+      - netgo
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/mostlydev/skiller/pkg/version.Version={{ .Version }}
+        -X github.com/mostlydev/skiller/pkg/version.Commit={{ .Commit }}
+        -X github.com/mostlydev/skiller/pkg/version.Date={{ .Date }}
+        -X github.com/mostlydev/skiller/pkg/version.BuiltBy=goreleaser
+
+archives:
+  - id: skiller
+    ids:
+      - skiller
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - docs/releases/*.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
