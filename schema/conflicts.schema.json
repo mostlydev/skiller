@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mostlydev/skiller/schema/conflicts.schema.json",
+  "title": "Skiller conflicts list output",
+  "description": "Output of `skiller conflicts list --json` (design doc §7). A source-aware union of the conflicts a fresh plan would record and the conflicts persisted in the state ledger (§6.8; M1 build-design §12 Q5). Each entry is tagged with provenance so a reader can tell a live, manifest-derived conflict from one remembered in the ledger.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "conflicts"],
+  "properties": {
+    "schema": { "const": "skiller-conflicts.v1" },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provenance", "conflict"],
+        "properties": {
+          "provenance": {
+            "description": "Where this conflict was observed: from a fresh plan over the supplied manifest, from the persisted ledger, or both.",
+            "enum": ["live-plan", "ledger", "both"]
+          },
+          "conflict": { "$ref": "plan.schema.json#/$defs/conflict" }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "plan.schema.json#/$defs/diagnostic" }
+    }
+  }
+}

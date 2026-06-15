@@ -53,6 +53,7 @@ func TestM1StatusAndConflictsGoldens(t *testing.T) {
 				"--state-dir", "/skiller/golden/state",
 				"--json",
 			},
+			schemaName: "conflicts.schema.json",
 		},
 		{
 			name: "conflicts-ledger-only",
@@ -61,6 +62,7 @@ func TestM1StatusAndConflictsGoldens(t *testing.T) {
 				"--state-dir", ledgerStateDir,
 				"--json",
 			},
+			schemaName: "conflicts.schema.json",
 		},
 	}
 
