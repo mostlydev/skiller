@@ -95,6 +95,44 @@ func Plan(opts Options) (contract.Plan, error) {
 	return buildPreparedPlan(prepared, world), nil
 }
 
+func PlanUninstall(opts UninstallOptions) (contract.Plan, error) {
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
+		Home:         opts.Home,
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   firstNonEmpty(opts.OnConflict, "block"),
+	})
+	if err != nil {
+		return contract.Plan{}, err
+	}
+	world := observePrepared(prepared)
+	plan := buildPreparedPlan(prepared, world)
+	planpkg.Sort(&plan)
+	return uninstallPlan(prepared, plan, opts), nil
+}
+
+func PlanCleanupDuplicates(opts CleanupOptions) (contract.Plan, error) {
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
+		Home:         opts.Home,
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   firstNonEmpty(opts.OnConflict, "block"),
+	})
+	if err != nil {
+		return contract.Plan{}, err
+	}
+	plan := baseOperationPlan(prepared, "cleanup-duplicates")
+	plan.Actions = prune.Plan(prune.Inputs{
+		Candidates:    prepared.Candidates,
+		SourcesBySpec: prepared.SourcesBySpec,
+		Namespace:     firstNonEmpty(prepared.Options.Namespace, prepared.Manifest.Namespace, prepared.Manifest.Owner),
+	})
+	planpkg.Sort(&plan)
+	return plan, nil
+}
+
 func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 	onConflict := opts.OnConflict
 	if onConflict == "" {
@@ -407,6 +445,74 @@ func buildPreparedPlan(prepared preparedPlan, world observe.WorldState) contract
 		World:           world,
 		Options:         prepared.Options,
 	})
+}
+
+func baseOperationPlan(prepared preparedPlan, operation string) contract.Plan {
+	return contract.Plan{
+		Schema:    "skiller-plan.v1",
+		Operation: operation,
+		DryRun:    true,
+		Inputs: contract.PlanInputs{
+			ManifestPath: prepared.Options.ManifestPath,
+			Home:         prepared.Options.Home,
+			Project:      prepared.Options.Project,
+			Namespace:    firstNonEmpty(prepared.Options.Namespace, prepared.Manifest.Namespace, prepared.Manifest.Owner),
+			OnConflict:   prepared.Options.OnConflict,
+		},
+		Sources:     prepared.Sources,
+		Actions:     []contract.PlanAction{},
+		Conflicts:   []contract.PlanConflict{},
+		Diagnostics: []contract.Diagnostic{},
+	}
+}
+
+func uninstallPlan(prepared preparedPlan, observed contract.Plan, opts UninstallOptions) contract.Plan {
+	plan := baseOperationPlan(prepared, "uninstall")
+	plan.Conflicts = observed.Conflicts
+	for _, action := range observed.Actions {
+		if action.Skill == nil {
+			continue
+		}
+		plan.Actions = append(plan.Actions, uninstallPlanAction(action, opts))
+	}
+	return plan
+}
+
+func uninstallPlanAction(action contract.PlanAction, opts UninstallOptions) contract.PlanAction {
+	out := action
+	out.PlannedWrites = nil
+	if action.Ownership.Class == "absent" {
+		out.Action = "skip-uninstall"
+		out.Status = "dry-run"
+		out.Reason = "target is not installed"
+		return out
+	}
+	if action.Target.Kind == "shared" && !(opts.Shared || opts.All) {
+		out.Action = "skip-uninstall"
+		out.Status = "dry-run"
+		out.Reason = "shared target requires --shared or --all"
+		return out
+	}
+	switch action.Ownership.Class {
+	case "ours-symlink":
+		out.Action = "remove-owned"
+		out.Status = "dry-run"
+		out.PlannedWrites = []contract.PlannedWrite{{Kind: "remove", Path: action.Target.Path}}
+	case "ours-copy":
+		out.Action = "remove-owned"
+		if !opts.Force && action.Ownership.Message != "" {
+			out.Status = "blocked"
+			out.Reason = action.Ownership.Message
+			return out
+		}
+		out.Status = "dry-run"
+		out.PlannedWrites = []contract.PlannedWrite{{Kind: "remove", Path: action.Target.Path}}
+	default:
+		out.Action = "skip-uninstall"
+		out.Status = "dry-run"
+		out.Reason = "target is not skiller-owned"
+	}
+	return out
 }
 
 func resolveHome(home string) (string, error) {

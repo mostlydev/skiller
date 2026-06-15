@@ -180,6 +180,7 @@ func runUninstall(args []string, stdout io.Writer) error {
 	shared := fs.Bool("shared", false, "allow shared target removal")
 	all := fs.Bool("all", false, "remove all owned targets, including shared targets")
 	force := fs.Bool("force", false, "remove owned copies even when their digest changed")
+	dryRun := fs.Bool("dry-run", false, "return plan without writes")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -189,6 +190,24 @@ func runUninstall(args []string, stdout io.Writer) error {
 	}
 	if *manifest == "" {
 		return fmt.Errorf("uninstall requires --manifest")
+	}
+	if *dryRun {
+		plan, err := app.PlanUninstall(app.UninstallOptions{
+			ManifestPath: *manifest,
+			Home:         *home,
+			Project:      *project,
+			Namespace:    *namespace,
+			StateDir:     *stateDir,
+			OnConflict:   *onConflict,
+			LockTimeout:  *lockTimeout,
+			Shared:       *shared,
+			All:          *all,
+			Force:        *force,
+		})
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, plan)
 	}
 	result, err := app.Uninstall(context.Background(), app.UninstallOptions{
 		ManifestPath: *manifest,
@@ -224,6 +243,7 @@ func runCleanupDuplicates(args []string, stdout io.Writer) error {
 	stateDir := fs.String("state-dir", "", "state directory")
 	onConflict := fs.String("on-conflict", "block", "conflict mode")
 	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
+	dryRun := fs.Bool("dry-run", false, "return plan without writes")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -233,6 +253,21 @@ func runCleanupDuplicates(args []string, stdout io.Writer) error {
 	}
 	if *manifest == "" {
 		return fmt.Errorf("cleanup-duplicates requires --manifest")
+	}
+	if *dryRun {
+		plan, err := app.PlanCleanupDuplicates(app.CleanupOptions{
+			ManifestPath: *manifest,
+			Home:         *home,
+			Project:      *project,
+			Namespace:    *namespace,
+			StateDir:     *stateDir,
+			OnConflict:   *onConflict,
+			LockTimeout:  *lockTimeout,
+		})
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, plan)
 	}
 	result, err := app.CleanupDuplicates(context.Background(), app.CleanupOptions{
 		ManifestPath: *manifest,
@@ -375,8 +410,8 @@ func usage(w io.Writer) error {
   skiller registry --json
   skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]
   skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]
-  skiller uninstall --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]
-  skiller cleanup-duplicates --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--lock-timeout DURATION]
+  skiller uninstall --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]
+  skiller cleanup-duplicates --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--lock-timeout DURATION]
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]`)

@@ -96,6 +96,17 @@ func TestUninstallRemovesOwnedRuntimeTarget(t *testing.T) {
 	if err := Run([]string{"install", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+	var dryRunOut bytes.Buffer
+	if err := Run([]string{"uninstall", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--dry-run", "--json"}, &dryRunOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("uninstall --dry-run: %v", err)
+	}
+	if err := schemajson.Validate("plan.schema.json", dryRunOut.Bytes()); err != nil {
+		t.Fatalf("uninstall dry-run plan schema: %v\n%s", err, dryRunOut.String())
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("dry-run should preserve target: %v", err)
+	}
 
 	var uninstallOut bytes.Buffer
 	if err := Run([]string{"uninstall", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &uninstallOut, &bytes.Buffer{}); err != nil {
@@ -111,7 +122,6 @@ func TestUninstallRemovesOwnedRuntimeTarget(t *testing.T) {
 	if len(result.Actions) != 1 || result.Actions[0].Status != "removed" {
 		t.Fatalf("actions = %#v, want one removed action", result.Actions)
 	}
-	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("target should be removed, stat err=%v", err)
 	}
@@ -131,6 +141,17 @@ func TestCleanupDuplicatesRemovesManagedSymlink(t *testing.T) {
 	}
 	if err := os.Symlink(src, duplicate); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	var dryRunOut bytes.Buffer
+	if err := Run([]string{"cleanup-duplicates", "--manifest", manifest, "--home", home, "--state-dir", stateDir, "--dry-run", "--json"}, &dryRunOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("cleanup-duplicates --dry-run: %v", err)
+	}
+	if err := schemajson.Validate("plan.schema.json", dryRunOut.Bytes()); err != nil {
+		t.Fatalf("cleanup dry-run plan schema: %v\n%s", err, dryRunOut.String())
+	}
+	if _, err := os.Lstat(duplicate); err != nil {
+		t.Fatalf("dry-run should preserve duplicate: %v", err)
 	}
 
 	var stdout bytes.Buffer
