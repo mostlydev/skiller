@@ -125,6 +125,30 @@ func TestCopyDirRetainBackupSurvivesSweep(t *testing.T) {
 	assertFile(t, filepath.Join(result.BackupPath, "SKILL.md"), "old\n")
 }
 
+// A force-replace that fails mid-swap is the worst case for the one destructive override:
+// the displaced foreign content must be rolled back to the target, never lost. The retain-
+// backup promote restores target from the backup on a failed stage->target rename.
+func TestCopyDirRetainBackupRollsBackOnPromoteFailure(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	writeFile(t, filepath.Join(source, "SKILL.md"), "new\n")
+	writeFile(t, filepath.Join(target, "SKILL.md"), "old\n")
+	writeFile(t, filepath.Join(target, "local.txt"), "operator notes\n")
+	opts := testOptions("rollback")
+	opts.Rename = func(oldpath, newpath string) error {
+		if strings.Contains(oldpath, stagePrefix) && newpath == target {
+			return errors.New("injected force-replace promote failure")
+		}
+		return os.Rename(oldpath, newpath)
+	}
+	if _, err := CopyDirRetainBackup(source, target, nil, opts); err == nil {
+		t.Fatal("expected injected promote failure")
+	}
+	assertFile(t, filepath.Join(target, "SKILL.md"), "old\n")
+	assertFile(t, filepath.Join(target, "local.txt"), "operator notes\n")
+}
+
 func testOptions(suffix string) Options {
 	return Options{Suffix: func() string { return suffix }}
 }
