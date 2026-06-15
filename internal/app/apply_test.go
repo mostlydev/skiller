@@ -395,6 +395,43 @@ func TestUninstallBlocksModifiedOwnedCopy(t *testing.T) {
 	}
 }
 
+// The critical destructive-safety invariant (§6.5): --force bypasses the digest-modified
+// check but NEVER the ownership check. A target skiller does not own must survive
+// uninstall even with --force. The ownership guard sits before the force branch, so a
+// foreign/unmarked target is skipped, not deleted.
+func TestUninstallForceDoesNotDeleteForeignTarget(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A foreign, non-skiller-owned copy already occupies the desired target (no marker).
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: clawdapus-cli\n---\n\nforeign content not ours\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Uninstall(context.Background(), UninstallOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		Force:        true,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Status == "removed" {
+		t.Fatalf("--force must never remove a foreign target, got %#v", result.Actions)
+	}
+	if _, err := os.Stat(filepath.Join(target, "SKILL.md")); err != nil {
+		t.Fatalf("foreign target must be preserved even with --force: %v", err)
+	}
+}
+
 func TestUninstallSkipsSharedUnlessExplicit(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
