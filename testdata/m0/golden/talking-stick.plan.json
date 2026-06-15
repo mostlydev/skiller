@@ -1,0 +1,162 @@
+{
+  "schema": "skiller-plan.v1",
+  "operation": "plan",
+  "dry_run": true,
+  "inputs": {
+    "manifest_path": "<FIXTURES>/manifests/talking-stick.toml",
+    "home": "/skiller/golden/home",
+    "namespace": "mostlydev",
+    "on_conflict": "block"
+  },
+  "sources": [
+    {
+      "id": "source-001",
+      "source_kind": "file",
+      "original_spec": "../sources/talking-stick",
+      "canonical_uri": "file://<FIXTURES>/sources/talking-stick",
+      "source_key": "file:<redacted>",
+      "source_status": "refreshed",
+      "local_cache_path": "<FIXTURES>/sources/talking-stick",
+      "source_realpath": "<FIXTURES>/sources/talking-stick",
+      "source_digest": "sha256:eaeffc8d4f95472e3258eda06dc2ecf2af73c56f6a6b6ae7199e883575234083",
+      "frontmatter_name": "talking-stick",
+      "description": "Coordinate agent harnesses with the Talking Stick CLI."
+    }
+  ],
+  "actions": [
+    {
+      "id": "act-4803a8957947d521",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:talking-stick",
+        "namespace": "mostlydev",
+        "name": "talking-stick",
+        "install_slug": "talking-stick",
+        "frontmatter_name": "talking-stick",
+        "description": "Coordinate agent harnesses with the Talking Stick CLI.",
+        "requested_targets": [
+          "claude-code"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "claude-code",
+        "kind": "proprietary",
+        "scope": "host",
+        "root": "/skiller/golden/home/.claude/skills",
+        "path": "/skiller/golden/home/.claude/skills/talking-stick",
+        "readers": [
+          "claude-code"
+        ],
+        "requested_targets": [
+          "claude-code"
+        ],
+        "lock_id": "target:3726358a2c1fffef"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.claude/skills/talking-stick"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.claude/skills/talking-stick"
+        }
+      ]
+    },
+    {
+      "id": "act-59861e025ed49ff3",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:talking-stick",
+        "namespace": "mostlydev",
+        "name": "talking-stick",
+        "install_slug": "talking-stick",
+        "frontmatter_name": "talking-stick",
+        "description": "Coordinate agent harnesses with the Talking Stick CLI.",
+        "requested_targets": [
+          "agents"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "agents",
+        "kind": "shared",
+        "scope": "host",
+        "root": "/skiller/golden/home/.agents/skills",
+        "path": "/skiller/golden/home/.agents/skills/talking-stick",
+        "readers": [
+          "codex",
+          "antigravity",
+          "grok",
+          "opencode"
+        ],
+        "requested_targets": [
+          "agents"
+        ],
+        "lock_id": "target:4ca5b174bd530c5a"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.agents/skills/talking-stick"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.agents/skills/talking-stick"
+        }
+      ]
+    },
+    {
+      "id": "act-5e85564e2a8c217b",
+      "action": "install-extra",
+      "status": "dry-run",
+      "extra": {
+        "id": "grok-session-hook",
+        "source": "<FIXTURES>/sources/talking-stick/grok-session.json",
+        "target": "/skiller/golden/home/.grok/hooks/talking-stick-session.json"
+      },
+      "target": {
+        "id": "grok",
+        "kind": "extra",
+        "scope": "host",
+        "root": "/skiller/golden/home/.grok/hooks",
+        "path": "/skiller/golden/home/.grok/hooks/talking-stick-session.json",
+        "readers": [
+          "grok"
+        ],
+        "lock_id": "target:df1bec253c9e7ea8"
+      },
+      "mode": {
+        "requested": "copy",
+        "effective": "copy"
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.grok/hooks/talking-stick-session.json"
+      },
+      "planned_writes": [
+        {
+          "kind": "file",
+          "path": "/skiller/golden/home/.grok/hooks/talking-stick-session.json"
+        },
+        {
+          "kind": "sidecar-marker",
+          "path": "/skiller/golden/home/.grok/hooks/talking-stick-session.json.skiller-install.json"
+        }
+      ]
+    }
+  ]
+}

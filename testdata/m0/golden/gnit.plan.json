@@ -1,0 +1,212 @@
+{
+  "schema": "skiller-plan.v1",
+  "operation": "plan",
+  "dry_run": true,
+  "inputs": {
+    "manifest_path": "<FIXTURES>/manifests/gnit.toml",
+    "home": "/skiller/golden/home",
+    "namespace": "mostlydev",
+    "on_conflict": "block"
+  },
+  "sources": [
+    {
+      "id": "source-001",
+      "source_kind": "file",
+      "original_spec": "../sources/gnit",
+      "canonical_uri": "file://<FIXTURES>/sources/gnit",
+      "source_key": "file:<redacted>",
+      "source_status": "refreshed",
+      "local_cache_path": "<FIXTURES>/sources/gnit",
+      "source_realpath": "<FIXTURES>/sources/gnit",
+      "source_digest": "sha256:f9d6533ce861c6b8f7be9ba825979aba94ad0dc4b6d2acd1ec3b697c682cce61",
+      "frontmatter_name": "gnit",
+      "description": "Coordinate cross-repository changes with Gnit."
+    }
+  ],
+  "actions": [
+    {
+      "id": "act-4ccaa06b46bb3592",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:gnit",
+        "namespace": "mostlydev",
+        "name": "gnit",
+        "install_slug": "gnit",
+        "frontmatter_name": "gnit",
+        "description": "Coordinate cross-repository changes with Gnit.",
+        "requested_targets": [
+          "grok-proprietary"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "grok-proprietary",
+        "kind": "proprietary",
+        "scope": "host",
+        "root": "/skiller/golden/home/.grok/skills",
+        "path": "/skiller/golden/home/.grok/skills/gnit",
+        "readers": [
+          "grok"
+        ],
+        "requested_targets": [
+          "grok-proprietary"
+        ],
+        "lock_id": "target:1eddbc227216881a"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.grok/skills/gnit"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.grok/skills/gnit"
+        }
+      ]
+    },
+    {
+      "id": "act-90f8f4a6eed3c238",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:gnit",
+        "namespace": "mostlydev",
+        "name": "gnit",
+        "install_slug": "gnit",
+        "frontmatter_name": "gnit",
+        "description": "Coordinate cross-repository changes with Gnit.",
+        "requested_targets": [
+          "claude-code-proprietary"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "claude-code-proprietary",
+        "kind": "proprietary",
+        "scope": "host",
+        "root": "/skiller/golden/home/.claude/skills",
+        "path": "/skiller/golden/home/.claude/skills/gnit",
+        "readers": [
+          "claude-code"
+        ],
+        "requested_targets": [
+          "claude-code-proprietary"
+        ],
+        "lock_id": "target:3726358a2c1fffef"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.claude/skills/gnit"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.claude/skills/gnit"
+        }
+      ]
+    },
+    {
+      "id": "act-b1fe871f8b3d4d9f",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:gnit",
+        "namespace": "mostlydev",
+        "name": "gnit",
+        "install_slug": "gnit",
+        "frontmatter_name": "gnit",
+        "description": "Coordinate cross-repository changes with Gnit.",
+        "requested_targets": [
+          "codex-proprietary"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "codex-proprietary",
+        "kind": "proprietary",
+        "scope": "host",
+        "root": "/skiller/golden/home/.codex/skills",
+        "path": "/skiller/golden/home/.codex/skills/gnit",
+        "readers": [
+          "codex"
+        ],
+        "requested_targets": [
+          "codex-proprietary"
+        ],
+        "lock_id": "target:4f323f910f265c2f"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.codex/skills/gnit"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.codex/skills/gnit"
+        }
+      ]
+    },
+    {
+      "id": "act-ee52d0a1b7064b00",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "mostlydev:gnit",
+        "namespace": "mostlydev",
+        "name": "gnit",
+        "install_slug": "gnit",
+        "frontmatter_name": "gnit",
+        "description": "Coordinate cross-repository changes with Gnit.",
+        "requested_targets": [
+          "opencode-proprietary"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "opencode-proprietary",
+        "kind": "proprietary",
+        "scope": "host",
+        "root": "/skiller/golden/home/.opencode/skills",
+        "path": "/skiller/golden/home/.opencode/skills/gnit",
+        "readers": [
+          "opencode"
+        ],
+        "requested_targets": [
+          "opencode-proprietary"
+        ],
+        "lock_id": "target:e6c3c4d8b2be12d0"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.opencode/skills/gnit"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.opencode/skills/gnit"
+        }
+      ]
+    }
+  ]
+}

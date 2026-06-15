@@ -157,12 +157,18 @@ env_home = "CLAUDE_CONFIG_DIR"
 
 ```
 
-`kind ∈ {shared, proprietary}` in v1. Loader is typed; unknown fields are a
-validation error so the data and code can't silently drift (mirrors the talking-stick
-rule that derived harness lists must not drift). The real registry needs a few more
-fields than the sketch: aliases/readers, global and project dirs, env-home overrides,
-detect dirs, duplicate-cleanup dirs, default mode, and whether the target can carry
-extras. These remain data-only and are covered by fixture-`HOME` tests.
+`kind ∈ {shared, proprietary, shared-reader}` in v1. `shared` is the canonical
+`agents` group; `proprietary` is a harness with its own private root (e.g.
+`claude-code`); `shared-reader` is a harness that primarily reads a shared group
+(`primary_target = "agents"`) yet keeps its own proprietary duplicate roots for
+detection/cleanup (codex, grok, antigravity, opencode). Loader is typed; unknown
+fields are a validation error so the data and code can't silently drift (mirrors the
+talking-stick rule that derived harness lists must not drift, and enforced by
+`decodeStrictTOML`'s `Undecoded()` check — the typed loader *is* the data schema, so
+no parallel JSON Schema for the TOMLs). The real registry needs a few more fields
+than the sketch: aliases/readers, global and project dirs, env-home overrides, detect
+dirs, duplicate-cleanup dirs, primary target, default mode, and whether the target can
+carry extras. These remain data-only and are covered by fixture-`HOME` tests.
 
 **Gemini is removed from the new installer.** Google says Gemini CLI stops serving
 consumer requests on **June 18, 2026**. Any legacy Gemini cleanup/delegation belongs in
