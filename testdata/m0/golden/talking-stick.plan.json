@@ -21,6 +21,17 @@
       "source_digest": "sha256:eaeffc8d4f95472e3258eda06dc2ecf2af73c56f6a6b6ae7199e883575234083",
       "frontmatter_name": "talking-stick",
       "description": "Coordinate agent harnesses with the Talking Stick CLI."
+    },
+    {
+      "id": "source-002",
+      "source_kind": "file",
+      "original_spec": "../sources/talking-stick/grok-session.json",
+      "canonical_uri": "file://<FIXTURES>/sources/talking-stick/grok-session.json",
+      "source_key": "file:<redacted>",
+      "source_status": "refreshed",
+      "local_cache_path": "<FIXTURES>/sources/talking-stick/grok-session.json",
+      "source_realpath": "<FIXTURES>/sources/talking-stick/grok-session.json",
+      "source_digest": "sha256:28c2bd6eacf14535de2afb88ee3ab9394953286262498cb8274c66bc6908d72e"
     }
   ],
   "actions": [

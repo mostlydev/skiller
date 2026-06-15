@@ -100,10 +100,14 @@ func (b *builder) planCandidate(candidate target.Candidate) {
 
 func (b *builder) planExtra(candidate target.ExtraCandidate) {
 	extra := candidate.Extra
-	sourcePath := resolvePath(extra.Source, filepath.Dir(b.in.Options.ManifestPath), b.in.Options.Home)
+	snapshot := b.in.SourcesBySpec[extra.Source]
+	sourcePath := snapshot.LocalCachePath
+	if sourcePath == "" {
+		sourcePath = resolvePath(extra.Source, filepath.Dir(b.in.Options.ManifestPath), b.in.Options.Home)
+	}
 	targetRef := candidate.Target
 	mode := firstNonEmpty(extra.Mode, "copy")
-	ownership := classifyExtra(b.in.World.Observed[targetRef.Path], targetRef.Path)
+	ownership := classifyExtra(b.in.World.Observed[targetRef.Path], targetRef.Path, snapshot.SourceDigest)
 	action := contract.PlanAction{
 		ID:     actionID("extra", extra.ID, targetRef.Path),
 		Action: "install-extra",
@@ -125,6 +129,11 @@ func (b *builder) planExtra(candidate target.ExtraCandidate) {
 			Kind: "sidecar-marker",
 			Path: targetRef.Path + ".skiller-install.json",
 		})
+	}
+	if ownership.DigestMatch != nil && *ownership.DigestMatch {
+		action.Action = "no-op"
+		action.Reason = "extra target already matches desired source"
+		action.PlannedWrites = nil
 	}
 	b.addAction(action)
 }
@@ -362,11 +371,12 @@ func firstMatchingForeign(observations []contract.ObservedOwnership) *contract.O
 	return nil
 }
 
-func classifyExtra(raw observe.RawObservation, path string) contract.ObservedOwnership {
+func classifyExtra(raw observe.RawObservation, path, desiredDigest string) contract.ObservedOwnership {
 	if !raw.Exists {
 		return contract.ObservedOwnership{Class: "absent", Path: path}
 	}
-	return contract.ObservedOwnership{Class: "foreign-unmanaged", Path: path, Message: raw.Err}
+	match := raw.Digest != "" && desiredDigest != "" && raw.Digest == desiredDigest
+	return contract.ObservedOwnership{Class: "foreign-unmanaged", Path: path, Digest: raw.Digest, DigestMatch: boolPtr(match), Message: raw.Err}
 }
 
 func Sort(plan *Plan) {

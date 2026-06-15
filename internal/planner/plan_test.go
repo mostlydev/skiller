@@ -59,6 +59,34 @@ func TestExistingExtraTargetIsObserved(t *testing.T) {
 	}
 }
 
+func TestMatchingExtraTargetPlansNoOp(t *testing.T) {
+	home := t.TempDir()
+	source := fixturePath(t, "sources/talking-stick/grok-session.json")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".grok/hooks/talking-stick-session.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := mustPlan(t, "talking-stick.toml", home)
+	action := findExtraAction(plan, "grok-session-hook")
+	if action == nil {
+		t.Fatal("missing grok-session-hook action")
+	}
+	if action.Action != "no-op" {
+		t.Fatalf("extra action = %q, want no-op; ownership=%#v", action.Action, action.Ownership)
+	}
+	if action.Ownership.DigestMatch == nil || !*action.Ownership.DigestMatch {
+		t.Fatalf("digest_match = %#v, want true", action.Ownership.DigestMatch)
+	}
+}
+
 func TestDigestMatchingDirectInstallIsSatisfiedByForeign(t *testing.T) {
 	home := t.TempDir()
 	src := fixturePath(t, "sources/talking-stick")

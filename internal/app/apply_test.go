@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mostlydev/skiller/internal/schemajson"
+	"github.com/mostlydev/skiller/pkg/install"
 	"github.com/mostlydev/skiller/pkg/state"
 )
 
@@ -106,6 +107,42 @@ func TestApplyIsIdempotent(t *testing.T) {
 	}
 	if len(loaded.Ledger.Installs) != 1 {
 		t.Fatalf("installs = %d, want exactly one (no duplicate on re-apply)", len(loaded.Ledger.Installs))
+	}
+}
+
+func TestApplyExtraIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "talking-stick.toml")
+	opts := ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	}
+	first, err := Apply(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstExtra := findResultExtra(first, "grok-session-hook")
+	if firstExtra == nil || firstExtra.Status != "installed" {
+		t.Fatalf("first extra action = %#v, want installed", firstExtra)
+	}
+
+	second, err := Apply(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondExtra := findResultExtra(second, "grok-session-hook")
+	if secondExtra == nil || secondExtra.Action != "no-op" || secondExtra.Status != "skipped" {
+		t.Fatalf("second extra action = %#v, want skipped no-op", secondExtra)
+	}
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Extras) != 1 {
+		t.Fatalf("extras = %#v, want one ledger extra without duplication", loaded.Ledger.Extras)
 	}
 }
 
@@ -636,9 +673,8 @@ func TestM2RepresentativeManifestsApplyWithoutBlockedActions(t *testing.T) {
 // manifests and is the regression guard for the link-mode idempotence fix (an ours-symlink
 // that resolves to the managed source must re-plan as a quiet no-op, never a spurious
 // refresh). A second apply must leave every SKILL install a no-op with no duplicate ledger
-// rows. NOTE: extras (install-extra) are excluded — they still re-copy because the pure
-// planner has no source digest for sidecar files yet; that idempotence gap is tracked
-// separately for a follow-up slice.
+// rows. Extras have separate coverage in TestApplyExtraIsIdempotent because they install
+// file targets rather than skill directories.
 func TestM2SkillInstallIdempotentAcrossShapes(t *testing.T) {
 	cases := []struct{ name, manifest string }{
 		{"talking-stick", "talking-stick.toml"},
@@ -686,6 +722,15 @@ func countLedgerInstalls(t *testing.T, stateDir string) int {
 		t.Fatal(err)
 	}
 	return len(loaded.Ledger.Installs)
+}
+
+func findResultExtra(result install.Result, id string) *install.ActionResult {
+	for i := range result.Actions {
+		if result.Actions[i].Extra != nil && result.Actions[i].Extra.ID == id {
+			return &result.Actions[i]
+		}
+	}
+	return nil
 }
 
 func assertApplyResultSchema(t *testing.T, result any) {

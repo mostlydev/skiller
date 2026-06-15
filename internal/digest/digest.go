@@ -18,7 +18,9 @@ func Path(path string) (string, error) {
 	}
 	hash := sha256.New()
 	if !info.IsDir() {
-		if err := hashFile(hash, path, filepath.Base(path)); err != nil {
+		// Single-file sources can be installed under a different target filename
+		// (for example harness hook files), so file identity is content-only.
+		if err := hashFile(hash, path, ""); err != nil {
 			return "", err
 		}
 		return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil

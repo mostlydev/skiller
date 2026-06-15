@@ -27,6 +27,11 @@ func ResolveAll(m manifest.Manifest, opts Options) ([]Snapshot, map[string]Snaps
 			return nil, nil, err
 		}
 	}
+	for _, extra := range m.Extras {
+		if _, err := resolver.resolveLocal(extra.Source); err != nil {
+			return nil, nil, err
+		}
+	}
 	bySpec := map[string]Snapshot{}
 	for _, source := range resolver.sources {
 		bySpec[source.OriginalSpec] = source
