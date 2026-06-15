@@ -289,6 +289,17 @@ func TestApplyForceReplaceForeignRequiresForce(t *testing.T) {
 	if backups := retainedBackups(t, filepath.Dir(target)); len(backups) != 0 {
 		t.Fatalf("backups = %#v, want none for refused force-replace", backups)
 	}
+	// A blocked apply must never mark a conflict resolved (do_not #2): no ledger
+	// conflict may carry a resolution/resolved_at after a refused force-replace.
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range loaded.Ledger.Conflicts {
+		if c.Resolution != "" || c.ResolvedAt != "" {
+			t.Fatalf("blocked apply marked a conflict resolved: %#v", c)
+		}
+	}
 }
 
 func TestApplyPromptWithoutPrompterBlocks(t *testing.T) {
