@@ -41,10 +41,17 @@ type ApplyOptions struct {
 	Namespace        string
 	InstallSlug      string
 	Force            bool
+	Resolutions      map[string]planpkg.Resolution
+	Prompter         Prompter
 	StateDir         string
 	OnConflict       string
 	LockTimeout      time.Duration
 	InstallerVersion string
+}
+
+type Prompter interface {
+	Ask(conflict contract.PlanConflict, choices []string) (planpkg.Resolution, error)
+	Confirm(conflict contract.PlanConflict, resolution planpkg.Resolution) (bool, error)
 }
 
 type RepairOptions struct {
@@ -94,13 +101,14 @@ type SyncOptions struct {
 }
 
 type preparedPlan struct {
-	Manifest        manifest.Manifest
-	Catalog         registry.Catalog
-	Sources         []source.Snapshot
-	SourcesBySpec   map[string]source.Snapshot
-	Candidates      []target.Candidate
-	ExtraCandidates []target.ExtraCandidate
-	Options         Options
+	Manifest          manifest.Manifest
+	Catalog           registry.Catalog
+	Sources           []source.Snapshot
+	SourcesBySpec     map[string]source.Snapshot
+	Candidates        []target.Candidate
+	ExtraCandidates   []target.ExtraCandidate
+	Options           Options
+	ResolvedConflicts []contract.PlanConflict
 }
 
 func Plan(opts Options) (contract.Plan, error) {
@@ -158,20 +166,71 @@ func PlanSync(opts SyncOptions) (contract.Plan, error) {
 	return syncPlan(prepared, desired, loaded.Ledger, opts), nil
 }
 
+func promptResolutions(opts Options, prompter Prompter) (Options, error) {
+	discoveryOpts := opts
+	discoveryOpts.OnConflict = "block"
+	discoveryOpts.Resolutions = nil
+	prepared, err := preparePlanWithRename(discoveryOpts)
+	if err != nil {
+		return Options{}, err
+	}
+	world := observePrepared(prepared)
+	plan := buildPreparedPlan(prepared, world)
+	planpkg.Sort(&plan)
+	resolutions := copyResolutions(opts.Resolutions)
+	for _, conflict := range plan.Conflicts {
+		choice, err := prompter.Ask(conflict, conflict.SafeChoices)
+		if err != nil {
+			return Options{}, err
+		}
+		choice.Policy = strings.TrimSpace(choice.Policy)
+		choice.InstallSlug = strings.TrimSpace(choice.InstallSlug)
+		if choice.Policy == "" || choice.Policy == "block" {
+			continue
+		}
+		if !hasChoice(conflict.SafeChoices, choice.Policy) {
+			return Options{}, fmt.Errorf("prompt returned unsupported resolution %q for conflict %s", choice.Policy, conflict.ID)
+		}
+		if choice.Policy == "force-replace" {
+			confirmed, err := prompter.Confirm(conflict, choice)
+			if err != nil {
+				return Options{}, err
+			}
+			if !confirmed {
+				continue
+			}
+		}
+		resolutions[conflict.ID] = choice
+	}
+	out := opts
+	out.OnConflict = "block"
+	out.Resolutions = resolutions
+	return out, nil
+}
+
 func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 	onConflict := opts.OnConflict
 	if onConflict == "" {
 		onConflict = "block"
 	}
-	prepared, err := preparePlanWithRename(Options{
+	planOptions := Options{
 		ManifestPath: opts.ManifestPath,
 		Home:         opts.Home,
 		Project:      opts.Project,
 		Namespace:    opts.Namespace,
 		InstallSlug:  opts.InstallSlug,
 		Force:        opts.Force,
+		Resolutions:  opts.Resolutions,
 		OnConflict:   onConflict,
-	})
+	}
+	var err error
+	if onConflict == "prompt" && opts.Prompter != nil {
+		planOptions, err = promptResolutions(planOptions, opts.Prompter)
+		if err != nil {
+			return install.Result{}, err
+		}
+	}
+	prepared, err := preparePlanWithRename(planOptions)
 	if err != nil {
 		return install.Result{}, err
 	}
@@ -205,7 +264,7 @@ func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 		return install.Result{}, err
 	}
 	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
-		applyLedgerUpdates(ledger, plan, result)
+		applyLedgerUpdates(ledger, plan, result, prepared.ResolvedConflicts)
 		return nil
 	}); err != nil {
 		return install.Result{}, err
@@ -516,7 +575,12 @@ func applyRenameResolutions(prepared preparedPlan) (preparedPlan, error) {
 		if policy != "rename" || strings.TrimSpace(slug) == "" || !renameConflictStatus(conflict.Status) {
 			continue
 		}
-		renames[conflict.DesiredCanonicalID] = strings.TrimSpace(slug)
+		slug = strings.TrimSpace(slug)
+		renames[conflict.DesiredCanonicalID] = slug
+		resolved := conflict
+		resolved.Resolution = "rename"
+		resolved.SafeChoices = nil
+		prepared.ResolvedConflicts = append(prepared.ResolvedConflicts, resolved)
 	}
 	if len(renames) == 0 {
 		return prepared, nil
@@ -774,6 +838,23 @@ func extraTargets(candidates []target.ExtraCandidate) []target.Ref {
 	return out
 }
 
+func copyResolutions(in map[string]planpkg.Resolution) map[string]planpkg.Resolution {
+	out := map[string]planpkg.Resolution{}
+	for id, resolution := range in {
+		out[id] = resolution
+	}
+	return out
+}
+
+func hasChoice(choices []string, want string) bool {
+	for _, choice := range choices {
+		if choice == want {
+			return true
+		}
+	}
+	return false
+}
+
 func applyLockIDs(prepared preparedPlan) []string {
 	var ids []string
 	for _, candidate := range prepared.Candidates {
@@ -831,7 +912,7 @@ func sweepOrphans(prepared preparedPlan) error {
 	return nil
 }
 
-func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install.Result) {
+func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install.Result, resolvedConflicts []contract.PlanConflict) {
 	plannedByID := map[string]contract.PlanAction{}
 	for _, action := range plan.Actions {
 		plannedByID[action.ID] = action
@@ -861,6 +942,17 @@ func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install
 			for _, conflict := range result.Conflicts {
 				upsertConflict(ledger, conflict)
 			}
+		}
+	}
+	if !hasFailedOrBlockedAction(result) {
+		for _, conflict := range appendResolvedConflicts(plan.Conflicts, resolvedConflicts) {
+			if conflict.Resolution == "" {
+				continue
+			}
+			if conflict.ResolvedAt == "" {
+				conflict.ResolvedAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			upsertConflict(ledger, conflict)
 		}
 	}
 }
@@ -1060,6 +1152,22 @@ func upsertConflict(ledger *state.Ledger, conflict contract.PlanConflict) {
 		}
 	}
 	ledger.Conflicts = append(ledger.Conflicts, conflict)
+}
+
+func hasFailedOrBlockedAction(result install.Result) bool {
+	for _, action := range result.Actions {
+		switch action.Status {
+		case "failed", "blocked", "partially-satisfied":
+			return true
+		}
+	}
+	return false
+}
+
+func appendResolvedConflicts(primary, extra []contract.PlanConflict) []contract.PlanConflict {
+	out := append([]contract.PlanConflict(nil), primary...)
+	out = append(out, extra...)
+	return out
 }
 
 func markerPath(action install.ActionResult, ownership contract.ObservedOwnership) string {

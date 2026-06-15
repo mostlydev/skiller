@@ -6,11 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/mostlydev/skiller/internal/app"
 	"github.com/mostlydev/skiller/internal/planner"
 	"github.com/mostlydev/skiller/pkg/install"
+	planpkg "github.com/mostlydev/skiller/pkg/plan"
 )
 
 func Run(args []string, stdout, stderr io.Writer) error {
@@ -393,6 +395,8 @@ func runConflicts(args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "list":
 		return runConflictsList(args[1:], stdout)
+	case "resolve":
+		return runConflictsResolve(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown conflicts subcommand %q", args[0])
 	}
@@ -424,6 +428,55 @@ func runConflictsList(args []string, stdout io.Writer) error {
 		return err
 	}
 	return writeJSON(stdout, report)
+}
+
+func runConflictsResolve(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller conflicts resolve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	force := fs.Bool("force", false, "allow force-replace conflict resolution")
+	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	resolutions := resolutionFlag{}
+	installSlug := ""
+	fs.Var(&resolutions, "resolution", "per-conflict resolution id=policy")
+	fs.Var(&installSlugFlag{global: &installSlug, resolutions: &resolutions}, "install-slug", "rename slug or per-conflict id=slug")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("conflicts resolve currently requires --json")
+	}
+	if *manifest == "" {
+		return fmt.Errorf("conflicts resolve requires --manifest")
+	}
+	result, err := app.Apply(context.Background(), app.ApplyOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		InstallSlug:  installSlug,
+		Force:        *force,
+		Resolutions:  resolutions.Map(),
+		StateDir:     *stateDir,
+		OnConflict:   *onConflict,
+		LockTimeout:  *lockTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(stdout, result); err != nil {
+		return err
+	}
+	if failed, blocked := countFailedBlocked(result); failed > 0 || blocked > 0 {
+		return actionStatusError{failed: failed, blocked: blocked}
+	}
+	return nil
 }
 
 func runState(args []string, stdout io.Writer) error {
@@ -483,8 +536,76 @@ func usage(w io.Writer) error {
   skiller sync --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
+  skiller conflicts resolve --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--resolution ID=POLICY] [--install-slug SLUG|ID=SLUG] [--force] [--lock-timeout DURATION]
   skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]`)
 	return err
+}
+
+type resolutionFlag map[string]planpkg.Resolution
+
+func (f *resolutionFlag) String() string {
+	return ""
+}
+
+func (f *resolutionFlag) Set(value string) error {
+	id, policy, ok := strings.Cut(value, "=")
+	id = strings.TrimSpace(id)
+	policy = strings.TrimSpace(policy)
+	if !ok || id == "" || policy == "" {
+		return fmt.Errorf("resolution must be id=policy")
+	}
+	if *f == nil {
+		*f = resolutionFlag{}
+	}
+	resolution := (*f)[id]
+	resolution.Policy = policy
+	(*f)[id] = resolution
+	return nil
+}
+
+func (f resolutionFlag) Map() map[string]planpkg.Resolution {
+	if len(f) == 0 {
+		return nil
+	}
+	out := map[string]planpkg.Resolution{}
+	for id, resolution := range f {
+		out[id] = resolution
+	}
+	return out
+}
+
+type installSlugFlag struct {
+	global      *string
+	resolutions *resolutionFlag
+}
+
+func (f *installSlugFlag) String() string {
+	if f.global == nil {
+		return ""
+	}
+	return *f.global
+}
+
+func (f *installSlugFlag) Set(value string) error {
+	if id, slug, ok := strings.Cut(value, "="); ok {
+		id = strings.TrimSpace(id)
+		slug = strings.TrimSpace(slug)
+		if id == "" || slug == "" {
+			return fmt.Errorf("install-slug must be slug or id=slug")
+		}
+		if *f.resolutions == nil {
+			*f.resolutions = resolutionFlag{}
+		}
+		resolution := (*f.resolutions)[id]
+		resolution.InstallSlug = slug
+		(*f.resolutions)[id] = resolution
+		return nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("install-slug must be non-empty")
+	}
+	*f.global = strings.TrimSpace(value)
+	return nil
 }
 
 func writeJSON(w io.Writer, value any) error {

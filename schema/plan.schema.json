@@ -183,6 +183,7 @@
         "desired_canonical_id": { "type": "string" },
         "status": { "type": "string" },
         "resolution": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" },
+        "resolved_at": { "type": "string", "format": "date-time" },
         "safe_choices": {
           "type": "array",
           "items": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" }

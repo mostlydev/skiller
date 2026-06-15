@@ -52,7 +52,11 @@ type ActionResult struct {
 }
 
 func Apply(plan contract.Plan, opts Options) (Result, error) {
-	result := Result{Schema: "skiller-apply-result.v1", Actions: []ActionResult{}}
+	result := Result{
+		Schema:      "skiller-apply-result.v1",
+		Actions:     []ActionResult{},
+		Diagnostics: append([]contract.Diagnostic(nil), plan.Diagnostics...),
+	}
 	sources := map[string]contract.SourceSnapshot{}
 	for _, source := range plan.Sources {
 		sources[source.ID] = source

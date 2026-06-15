@@ -12,6 +12,7 @@ import (
 	"github.com/mostlydev/skiller/internal/schemajson"
 	"github.com/mostlydev/skiller/pkg/install"
 	statepkg "github.com/mostlydev/skiller/pkg/state"
+	statuspkg "github.com/mostlydev/skiller/pkg/status"
 )
 
 func TestInstallDryRunMatchesPlan(t *testing.T) {
@@ -114,6 +115,73 @@ func TestPlanForceFlag(t *testing.T) {
 	}
 	if !plan.Inputs.Force {
 		t.Fatalf("force input = false, want true")
+	}
+}
+
+func TestConflictsResolveRecordsRememberedResolutionInStatus(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "talking-stick.toml")
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	target := filepath.Join(home, ".agents", "skills", "talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var conflictsOut bytes.Buffer
+	if err := Run([]string{"conflicts", "list", "--manifest", manifest, "--home", home, "--state-dir", stateDir, "--json"}, &conflictsOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("conflicts list: %v", err)
+	}
+	var conflicts struct {
+		Conflicts []struct {
+			Conflict contract.PlanConflict `json:"conflict"`
+		} `json:"conflicts"`
+	}
+	if err := json.Unmarshal(conflictsOut.Bytes(), &conflicts); err != nil {
+		t.Fatal(err)
+	}
+	if len(conflicts.Conflicts) == 0 {
+		t.Fatalf("expected live conflict, got %s", conflictsOut.String())
+	}
+	conflictID := conflicts.Conflicts[0].Conflict.ID
+
+	var resolveOut bytes.Buffer
+	if err := Run([]string{
+		"conflicts", "resolve",
+		"--manifest", manifest,
+		"--home", home,
+		"--state-dir", stateDir,
+		"--resolution", conflictID + "=adopt-existing",
+		"--json",
+	}, &resolveOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("conflicts resolve: %v\n%s", err, resolveOut.String())
+	}
+	if err := schemajson.Validate("apply-result.schema.json", resolveOut.Bytes()); err != nil {
+		t.Fatalf("apply-result schema: %v\n%s", err, resolveOut.String())
+	}
+
+	var statusOut bytes.Buffer
+	if err := Run([]string{"status", "--manifest", manifest, "--home", home, "--state-dir", stateDir, "--json"}, &statusOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if err := schemajson.Validate("status.schema.json", statusOut.Bytes()); err != nil {
+		t.Fatalf("status schema: %v\n%s", err, statusOut.String())
+	}
+	var report statuspkg.Report
+	if err := json.Unmarshal(statusOut.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	var remembered *contract.PlanConflict
+	for i := range report.Conflicts {
+		if report.Conflicts[i].ID == conflictID {
+			remembered = &report.Conflicts[i]
+			break
+		}
+	}
+	if remembered == nil || remembered.Resolution != "adopt-existing" || remembered.ResolvedAt == "" {
+		t.Fatalf("status conflicts = %#v, want remembered adopt-existing resolution", report.Conflicts)
 	}
 }
 

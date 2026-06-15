@@ -121,6 +121,7 @@ func Conflicts(plan *contract.Plan, ledger state.Ledger, diagnostics []contract.
 	for _, conflict := range ledger.Conflicts {
 		if item, ok := byID[conflict.ID]; ok {
 			item.Provenance = "both"
+			item.Conflict = mergeConflictResolution(item.Conflict, conflict)
 			byID[conflict.ID] = item
 			continue
 		}
@@ -218,7 +219,9 @@ func mergePlanConflicts(live, ledger []contract.PlanConflict) []contract.PlanCon
 		byID[conflict.ID] = conflict
 	}
 	for _, conflict := range ledger {
-		if _, ok := byID[conflict.ID]; !ok {
+		if existing, ok := byID[conflict.ID]; ok {
+			byID[conflict.ID] = mergeConflictResolution(existing, conflict)
+		} else {
 			byID[conflict.ID] = conflict
 		}
 	}
@@ -227,4 +230,14 @@ func mergePlanConflicts(live, ledger []contract.PlanConflict) []contract.PlanCon
 		out = append(out, conflict)
 	}
 	return out
+}
+
+func mergeConflictResolution(live, remembered contract.PlanConflict) contract.PlanConflict {
+	if remembered.Resolution != "" {
+		live.Resolution = remembered.Resolution
+	}
+	if remembered.ResolvedAt != "" {
+		live.ResolvedAt = remembered.ResolvedAt
+	}
+	return live
 }

@@ -52,6 +52,7 @@ type builder struct {
 	actionKeys                  map[string]bool
 	desiredByPath               map[string]string
 	frontmatter                 map[string]frontmatterClaim
+	usedResolutionIDs           map[string]bool
 	globalForceReplaceConflicts int
 }
 
@@ -68,6 +69,7 @@ func Build(in Inputs) Plan {
 		actionKeys:                  map[string]bool{},
 		desiredByPath:               map[string]string{},
 		frontmatter:                 map[string]frontmatterClaim{},
+		usedResolutionIDs:           map[string]bool{},
 		globalForceReplaceConflicts: countGlobalForceReplaceConflicts(in),
 	}
 	for _, candidate := range in.Candidates {
@@ -76,6 +78,7 @@ func Build(in Inputs) Plan {
 	for _, candidate := range in.ExtraCandidates {
 		b.planExtra(candidate)
 	}
+	b.addUnknownResolutionDiagnostics()
 	return Plan{
 		Schema:    "skiller-plan.v1",
 		Operation: "plan",
@@ -438,6 +441,11 @@ func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.
 		b.addConflict(conflict)
 		return action
 	}
+	if policy == "rename" {
+		action.Reason = b.inapplicableResolutionReason(conflict.Status, policy)
+		b.addConflict(conflict)
+		return action
+	}
 	if policy == "force-replace" {
 		if !b.in.Options.Force {
 			action.Reason = "force-replace resolution requires --force"
@@ -514,10 +522,27 @@ func (b *builder) inapplicableResolutionReason(status, policy string) string {
 func (b *builder) resolutionPolicy(conflict contract.PlanConflict) (string, bool) {
 	if b.in.Options.Resolutions != nil {
 		if resolution, ok := b.in.Options.Resolutions[conflict.ID]; ok && strings.TrimSpace(resolution.Policy) != "" {
+			b.usedResolutionIDs[conflict.ID] = true
 			return strings.TrimSpace(resolution.Policy), true
 		}
 	}
 	return strings.TrimSpace(b.in.Options.OnConflict), false
+}
+
+func (b *builder) addUnknownResolutionDiagnostics() {
+	for id, resolution := range b.in.Options.Resolutions {
+		if b.usedResolutionIDs[id] {
+			continue
+		}
+		if strings.TrimSpace(resolution.Policy) == "" && strings.TrimSpace(resolution.InstallSlug) == "" {
+			continue
+		}
+		b.diagnostics = append(b.diagnostics, contract.Diagnostic{
+			Level:   "warning",
+			Message: "resolution id not present in authoritative plan; ignoring stale or already-resolved resolution",
+			Path:    id,
+		})
+	}
 }
 
 func applicableConflictModes(status string) []string {
@@ -547,6 +572,8 @@ func policyApplies(status, policy string) bool {
 		return status == "foreign-target" || status == "partial-satisfaction"
 	case "replace-owned":
 		return status == "modified-owned-copy"
+	case "rename":
+		return status == "namespace-collision" || status == "foreign-target"
 	case "force-replace":
 		return status == "modified-owned-copy" || status == "foreign-target"
 	default:

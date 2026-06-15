@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mostlydev/skiller/internal/contract"
 	"github.com/mostlydev/skiller/internal/fsutil"
 	"github.com/mostlydev/skiller/internal/schemajson"
 	"github.com/mostlydev/skiller/pkg/install"
+	planpkg "github.com/mostlydev/skiller/pkg/plan"
 	"github.com/mostlydev/skiller/pkg/state"
 )
 
@@ -286,6 +288,104 @@ func TestApplyForceReplaceForeignRequiresForce(t *testing.T) {
 	assertFileContent(t, filepath.Join(target, "SKILL.md"), "---\nname: local-talking-stick\n---\n\nlocal\n")
 	if backups := retainedBackups(t, filepath.Dir(target)); len(backups) != 0 {
 		t.Fatalf("backups = %#v, want none for refused force-replace", backups)
+	}
+}
+
+func TestApplyPromptWithoutPrompterBlocks(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "talking-stick")
+	target := filepath.Join(home, ".agents", "skills", "talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+	result, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		OnConflict:   "prompt",
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Status != "blocked" {
+		t.Fatalf("actions = %#v, want no-prompter prompt to block", result.Actions)
+	}
+	assertFileContent(t, filepath.Join(target, "SKILL.md"), "---\nname: local-talking-stick\n---\n\nlocal\n")
+}
+
+func TestApplyPromptForceReplaceConfirmAndAbort(t *testing.T) {
+	src := fixtureSource(t, "talking-stick")
+	run := func(t *testing.T, confirm bool) install.Result {
+		t.Helper()
+		home := t.TempDir()
+		stateDir := t.TempDir()
+		target := filepath.Join(home, ".agents", "skills", "talking-stick")
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+		result, err := Apply(context.Background(), ApplyOptions{
+			ManifestPath: manifest,
+			Home:         home,
+			StateDir:     stateDir,
+			OnConflict:   "prompt",
+			Force:        true,
+			Prompter: fakePrompter{
+				choice:  planpkg.Resolution{Policy: "force-replace"},
+				confirm: confirm,
+			},
+			LockTimeout: time.Second,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	aborted := run(t, false)
+	if len(aborted.Actions) != 1 || aborted.Actions[0].Status != "blocked" {
+		t.Fatalf("aborted actions = %#v, want blocked", aborted.Actions)
+	}
+	confirmed := run(t, true)
+	if len(confirmed.Actions) != 1 || confirmed.Actions[0].Action != "force-replace" || confirmed.Actions[0].Status != "updated" {
+		t.Fatalf("confirmed actions = %#v, want updated force-replace", confirmed.Actions)
+	}
+	if confirmed.Actions[0].BackupPath == "" {
+		t.Fatalf("confirmed force-replace missing backup path: %#v", confirmed.Actions[0])
+	}
+}
+
+func TestApplyPromptRenameInstallsExplicitSlug(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "namespace-collision.toml")
+	result, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		OnConflict:   "prompt",
+		Prompter: fakePrompter{
+			choice: planpkg.Resolution{Policy: "rename", InstallSlug: "debugging-beta"},
+		},
+		LockTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 2 {
+		t.Fatalf("actions = %#v, want two installs after prompt rename", result.Actions)
+	}
+	if findResultSkill(result, "beta:debugging", filepath.Join(home, ".agents/skills/debugging-beta")) == nil {
+		t.Fatalf("missing renamed beta install action: %#v", result.Actions)
 	}
 }
 
@@ -883,6 +983,19 @@ func findResultSkill(result install.Result, canonicalID, targetPath string) *ins
 		}
 	}
 	return nil
+}
+
+type fakePrompter struct {
+	choice  planpkg.Resolution
+	confirm bool
+}
+
+func (p fakePrompter) Ask(contract.PlanConflict, []string) (planpkg.Resolution, error) {
+	return p.choice, nil
+}
+
+func (p fakePrompter) Confirm(contract.PlanConflict, planpkg.Resolution) (bool, error) {
+	return p.confirm, nil
 }
 
 func retainedBackups(t *testing.T, parent string) []string {

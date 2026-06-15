@@ -187,6 +187,7 @@ type PlanConflict struct {
 	DesiredCanonicalID  string   `json:"desired_canonical_id"`
 	Status              string   `json:"status"`
 	Resolution          string   `json:"resolution,omitempty"`
+	ResolvedAt          string   `json:"resolved_at,omitempty"`
 	SafeChoices         []string `json:"safe_choices,omitempty"`
 }
 

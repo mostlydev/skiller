@@ -383,6 +383,21 @@ func TestResolutionMapOverridesDefaultPolicyByConflictID(t *testing.T) {
 	assertConflict(t, plan, "namespace-collision", "skip")
 }
 
+func TestUnknownResolutionIDWarnsButDoesNotFail(t *testing.T) {
+	home := t.TempDir()
+	plan := mustPlanWithOptions(t, "talking-stick.toml", home, func(opts *Options) {
+		opts.Resolutions = map[string]planpkg.Resolution{
+			"missing-conflict-id": {Policy: "skip"},
+		}
+	})
+	if len(plan.Diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v, want one warning for stale resolution", plan.Diagnostics)
+	}
+	if plan.Diagnostics[0].Level != "warning" || plan.Diagnostics[0].Path != "missing-conflict-id" {
+		t.Fatalf("diagnostic = %#v", plan.Diagnostics[0])
+	}
+}
+
 func TestInapplicableResolutionRemainsBlocked(t *testing.T) {
 	home := t.TempDir()
 	plan := mustPlanWithOptions(t, "namespace-collision.toml", home, func(opts *Options) {
