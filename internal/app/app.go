@@ -52,6 +52,19 @@ type RepairOptions struct {
 	LockTimeout  time.Duration
 }
 
+type UninstallOptions struct {
+	ManifestPath string
+	Home         string
+	Project      string
+	Namespace    string
+	StateDir     string
+	OnConflict   string
+	LockTimeout  time.Duration
+	Shared       bool
+	All          bool
+	Force        bool
+}
+
 type preparedPlan struct {
 	Manifest        manifest.Manifest
 	Catalog         registry.Catalog
@@ -117,6 +130,54 @@ func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 	}
 	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
 		applyLedgerUpdates(ledger, plan, result)
+		return nil
+	}); err != nil {
+		return install.Result{}, err
+	}
+	return result, nil
+}
+
+func Uninstall(ctx context.Context, opts UninstallOptions) (install.Result, error) {
+	onConflict := opts.OnConflict
+	if onConflict == "" {
+		onConflict = "block"
+	}
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
+		Home:         opts.Home,
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   onConflict,
+	})
+	if err != nil {
+		return install.Result{}, err
+	}
+	stateDir, err := state.ResolveDir(opts.StateDir)
+	if err != nil {
+		return install.Result{}, err
+	}
+	manager := lock.NewManager(stateDir)
+	if opts.LockTimeout > 0 {
+		manager = manager.WithTimeout(opts.LockTimeout)
+	}
+	locks, err := manager.AcquireTargets(ctx, applyLockIDs(prepared))
+	if err != nil {
+		return install.Result{}, err
+	}
+	defer locks.Release()
+	world := observePrepared(prepared)
+	plan := buildPreparedPlan(prepared, world)
+	planpkg.Sort(&plan)
+	result, err := install.Uninstall(plan, install.UninstallOptions{
+		Owner:        prepared.Manifest.Owner,
+		RemoveShared: opts.Shared || opts.All,
+		Force:        opts.Force,
+	})
+	if err != nil {
+		return install.Result{}, err
+	}
+	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
+		applyUninstallLedgerUpdates(ledger, result)
 		return nil
 	}); err != nil {
 		return install.Result{}, err
@@ -397,6 +458,14 @@ func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install
 	}
 }
 
+func applyUninstallLedgerUpdates(ledger *state.Ledger, result install.Result) {
+	for _, action := range result.Actions {
+		if action.Status == "removed" && action.Skill != nil {
+			removeInstall(ledger, action)
+		}
+	}
+}
+
 func repairLedger(ledger *state.Ledger, plan contract.Plan) {
 	sourcesByID := map[string]contract.SourceSnapshot{}
 	for _, source := range plan.Sources {
@@ -513,6 +582,17 @@ func upsertInstall(ledger *state.Ledger, action install.ActionResult, planned co
 		}
 	}
 	ledger.Installs = append(ledger.Installs, record)
+}
+
+func removeInstall(ledger *state.Ledger, action install.ActionResult) {
+	id := "install:" + action.ID
+	out := ledger.Installs[:0]
+	for _, install := range ledger.Installs {
+		if install.ID != id {
+			out = append(out, install)
+		}
+	}
+	ledger.Installs = out
 }
 
 func installMode(action install.ActionResult, ownership contract.ObservedOwnership) string {

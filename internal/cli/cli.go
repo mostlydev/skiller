@@ -24,6 +24,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runPlan(args[1:], stdout)
 	case "install":
 		return runInstall(args[1:], stdout)
+	case "uninstall":
+		return runUninstall(args[1:], stdout)
 	case "status":
 		return runStatus(args[1:], stdout)
 	case "conflicts":
@@ -148,7 +150,7 @@ type actionStatusError struct {
 }
 
 func (e actionStatusError) Error() string {
-	return fmt.Sprintf("install completed with %d failed and %d blocked action(s)", e.failed, e.blocked)
+	return fmt.Sprintf("operation completed with %d failed and %d blocked action(s)", e.failed, e.blocked)
 }
 
 func countFailedBlocked(result install.Result) (failed, blocked int) {
@@ -161,6 +163,53 @@ func countFailedBlocked(result install.Result) (failed, blocked int) {
 		}
 	}
 	return failed, blocked
+}
+
+func runUninstall(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller uninstall", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
+	shared := fs.Bool("shared", false, "allow shared target removal")
+	all := fs.Bool("all", false, "remove all owned targets, including shared targets")
+	force := fs.Bool("force", false, "remove owned copies even when their digest changed")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("uninstall currently requires --json")
+	}
+	if *manifest == "" {
+		return fmt.Errorf("uninstall requires --manifest")
+	}
+	result, err := app.Uninstall(context.Background(), app.UninstallOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		StateDir:     *stateDir,
+		OnConflict:   *onConflict,
+		LockTimeout:  *lockTimeout,
+		Shared:       *shared,
+		All:          *all,
+		Force:        *force,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(stdout, result); err != nil {
+		return err
+	}
+	if failed, blocked := countFailedBlocked(result); failed > 0 || blocked > 0 {
+		return actionStatusError{failed: failed, blocked: blocked}
+	}
+	return nil
 }
 
 func runStatus(args []string, stdout io.Writer) error {
@@ -283,6 +332,7 @@ func usage(w io.Writer) error {
   skiller registry --json
   skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]
   skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]
+  skiller uninstall --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]`)

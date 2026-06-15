@@ -56,7 +56,9 @@
             "adopt-existing",
             "block-conflict",
             "partially-satisfied",
-            "satisfied-by-foreign"
+            "satisfied-by-foreign",
+            "remove-owned",
+            "skip-uninstall"
           ]
         },
         "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },
@@ -159,7 +161,7 @@
       "additionalProperties": false,
       "required": ["kind", "path"],
       "properties": {
-        "kind": { "enum": ["link", "copy", "file", "marker", "sidecar-marker", "remove-legacy-marker"] },
+        "kind": { "enum": ["link", "copy", "file", "marker", "sidecar-marker", "remove", "remove-legacy-marker"] },
         "path": { "type": "string", "minLength": 1 }
       }
     },

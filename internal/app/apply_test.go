@@ -253,6 +253,153 @@ func TestRepairRebuildsOwnedInstallAfterMissingState(t *testing.T) {
 	}
 }
 
+func TestUninstallRemovesOwnedRuntimeCopyAndState(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	opts := ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	}
+	if _, err := Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+
+	result, err := Uninstall(context.Background(), UninstallOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Action != "remove-owned" || result.Actions[0].Status != "removed" {
+		t.Fatalf("result actions = %#v, want one removed action", result.Actions)
+	}
+	assertApplyResultSchema(t, result)
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target should be removed, stat err=%v", err)
+	}
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Installs) != 0 {
+		t.Fatalf("installs = %#v, want uninstall to remove install row", loaded.Ledger.Installs)
+	}
+}
+
+func TestUninstallBlocksModifiedOwnedCopy(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	if _, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+	if err := os.WriteFile(filepath.Join(target, "local-notes.md"), []byte("operator edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Uninstall(context.Background(), UninstallOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Status != "blocked" {
+		t.Fatalf("result actions = %#v, want blocked modified-copy removal", result.Actions)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("target should be preserved: %v", err)
+	}
+
+	forced, err := Uninstall(context.Background(), UninstallOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		Force:        true,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(forced.Actions) != 1 || forced.Actions[0].Status != "removed" {
+		t.Fatalf("forced actions = %#v, want removed modified copy", forced.Actions)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target should be removed with force, stat err=%v", err)
+	}
+}
+
+func TestUninstallSkipsSharedUnlessExplicit(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "talking-stick")
+	manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+	if _, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".agents", "skills", "talking-stick")
+
+	skipped, err := Uninstall(context.Background(), UninstallOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped.Actions) != 1 || skipped.Actions[0].Action != "skip-uninstall" || skipped.Actions[0].Status != "skipped" {
+		t.Fatalf("result actions = %#v, want shared skip", skipped.Actions)
+	}
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatalf("shared target should remain: %v", err)
+	}
+
+	removed, err := Uninstall(context.Background(), UninstallOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		Shared:       true,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed.Actions) != 1 || removed.Actions[0].Status != "removed" {
+		t.Fatalf("result actions = %#v, want explicit shared removal", removed.Actions)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("shared target should be removed, stat err=%v", err)
+	}
+}
+
 func assertApplyResultSchema(t *testing.T, result any) {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)

@@ -87,3 +87,32 @@ func TestStateRepairWritesStateLedger(t *testing.T) {
 		t.Fatalf("installs = %#v, want one repaired installed target", ledger.Installs)
 	}
 }
+
+func TestUninstallRemovesOwnedRuntimeTarget(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	if err := Run([]string{"install", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	var uninstallOut bytes.Buffer
+	if err := Run([]string{"uninstall", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &uninstallOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if err := schemajson.Validate("apply-result.schema.json", uninstallOut.Bytes()); err != nil {
+		t.Fatalf("apply-result schema: %v\n%s", err, uninstallOut.String())
+	}
+	var result install.Result
+	if err := json.Unmarshal(uninstallOut.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Status != "removed" {
+		t.Fatalf("actions = %#v, want one removed action", result.Actions)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target should be removed, stat err=%v", err)
+	}
+}

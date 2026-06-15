@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mostlydev/skiller/internal/contract"
@@ -19,6 +20,12 @@ type Options struct {
 	Version      string
 	Now          func() time.Time
 	FS           fsutil.Options
+}
+
+type UninstallOptions struct {
+	Owner        string
+	RemoveShared bool
+	Force        bool
 }
 
 type Result struct {
@@ -59,6 +66,22 @@ func Apply(plan contract.Plan, opts Options) (Result, error) {
 				}
 			}
 		}
+	}
+	return result, nil
+}
+
+func Uninstall(plan contract.Plan, opts UninstallOptions) (Result, error) {
+	result := Result{Schema: "skiller-apply-result.v1", Actions: []ActionResult{}}
+	sources := map[string]contract.SourceSnapshot{}
+	for _, source := range plan.Sources {
+		sources[source.ID] = source
+	}
+	for _, action := range plan.Actions {
+		if action.Skill == nil {
+			continue
+		}
+		actionResult := uninstallAction(action, sources[action.SourceID], plan, opts)
+		result.Actions = append(result.Actions, actionResult)
 	}
 	return result, nil
 }
@@ -144,6 +167,105 @@ func applyAction(action contract.PlanAction, sources map[string]contract.SourceS
 	default:
 		return failed(out, "unsupported action "+action.Action)
 	}
+}
+
+func uninstallAction(action contract.PlanAction, source contract.SourceSnapshot, plan contract.Plan, opts UninstallOptions) ActionResult {
+	out := ActionResult{
+		ID:            action.ID,
+		Action:        "remove-owned",
+		Target:        action.Target,
+		Skill:         action.Skill,
+		RequestedMode: action.Mode.Requested,
+		EffectiveMode: action.Mode.Effective,
+	}
+	if action.Ownership.Class == "absent" {
+		out.Action = "skip-uninstall"
+		out.Status = "skipped"
+		out.Reason = "target is not installed"
+		return out
+	}
+	if action.Target.Kind == "shared" && !opts.RemoveShared {
+		out.Action = "skip-uninstall"
+		out.Status = "skipped"
+		out.Reason = "shared target requires --shared or --all"
+		return out
+	}
+	switch action.Ownership.Class {
+	case "ours-symlink":
+		return removeOwnedSymlink(out, source)
+	case "ours-copy":
+		return removeOwnedCopy(out, plan, opts)
+	default:
+		out.Action = "skip-uninstall"
+		out.Status = "skipped"
+		out.Reason = "target is not skiller-owned"
+		return out
+	}
+}
+
+func removeOwnedSymlink(out ActionResult, source contract.SourceSnapshot) ActionResult {
+	info, err := os.Lstat(out.Target.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			out.Action = "skip-uninstall"
+			out.Status = "skipped"
+			out.Reason = "target is not installed"
+			return out
+		}
+		return failed(out, err.Error())
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		out.Status = "blocked"
+		out.Reason = "target is not a symlink"
+		return out
+	}
+	realpath, err := filepath.EvalSymlinks(out.Target.Path)
+	if err != nil {
+		return failed(out, err.Error())
+	}
+	if !samePath(realpath, source.SourceRealpath) {
+		out.Status = "blocked"
+		out.Reason = "symlink does not resolve to managed source"
+		return out
+	}
+	if err := os.Remove(out.Target.Path); err != nil {
+		return failed(out, err.Error())
+	}
+	out.Status = "removed"
+	out.Writes = []contract.PlannedWrite{{Kind: "remove", Path: out.Target.Path}}
+	return out
+}
+
+func removeOwnedCopy(out ActionResult, plan contract.Plan, opts UninstallOptions) ActionResult {
+	marker, err := readMarkerPayload(out.Target.Path)
+	if err != nil {
+		out.Status = "blocked"
+		out.Reason = err.Error()
+		return out
+	}
+	owner := firstNonEmpty(opts.Owner, plan.Inputs.Namespace)
+	if marker.Installer.Name != "skiller" || marker.Owner != owner || marker.CanonicalID != out.Skill.CanonicalID {
+		out.Status = "blocked"
+		out.Reason = "copy marker does not match requested owner and skill"
+		return out
+	}
+	if !opts.Force {
+		currentDigest, err := digest.Path(out.Target.Path)
+		if err != nil {
+			return failed(out, err.Error())
+		}
+		if currentDigest != marker.InstalledDigestAtInstall {
+			out.Status = "blocked"
+			out.Reason = "owned copy is modified; refusing conservative delete"
+			return out
+		}
+	}
+	if err := os.RemoveAll(out.Target.Path); err != nil {
+		return failed(out, err.Error())
+	}
+	out.Status = "removed"
+	out.Writes = []contract.PlannedWrite{{Kind: "remove", Path: out.Target.Path}}
+	return out
 }
 
 func markerMutator(action contract.PlanAction, source contract.SourceSnapshot, plan contract.Plan, opts Options) func(stage string) error {
@@ -244,6 +366,18 @@ type markerInstaller struct {
 	Version string `json:"version"`
 }
 
+func readMarkerPayload(dir string) (markerPayload, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ".skiller-install.json"))
+	if err != nil {
+		return markerPayload{}, fmt.Errorf("read copy marker: %w", err)
+	}
+	var marker markerPayload
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return markerPayload{}, fmt.Errorf("decode copy marker: %w", err)
+	}
+	return marker, nil
+}
+
 func failed(result ActionResult, message string) ActionResult {
 	result.Status = "failed"
 	result.Error = message
@@ -300,4 +434,19 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, err := filepath.Abs(a)
+	if err == nil {
+		a = aa
+	}
+	bb, err := filepath.Abs(b)
+	if err == nil {
+		b = bb
+	}
+	return filepath.Clean(strings.TrimSpace(a)) == filepath.Clean(strings.TrimSpace(b))
 }
