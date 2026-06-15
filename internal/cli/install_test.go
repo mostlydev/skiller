@@ -116,3 +116,31 @@ func TestUninstallRemovesOwnedRuntimeTarget(t *testing.T) {
 		t.Fatalf("target should be removed, stat err=%v", err)
 	}
 }
+
+func TestCleanupDuplicatesRemovesManagedSymlink(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "talking-stick.toml")
+	src, err := filepath.Abs(filepath.Join("..", "..", "testdata", "m0", "sources", "talking-stick"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	duplicate := filepath.Join(home, ".codex", "skills", "talking-stick")
+	if err := os.MkdirAll(filepath.Dir(duplicate), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(src, duplicate); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run([]string{"cleanup-duplicates", "--manifest", manifest, "--home", home, "--state-dir", stateDir, "--json"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("cleanup-duplicates: %v", err)
+	}
+	if err := schemajson.Validate("apply-result.schema.json", stdout.Bytes()); err != nil {
+		t.Fatalf("apply-result schema: %v\n%s", err, stdout.String())
+	}
+	if _, err := os.Lstat(duplicate); !os.IsNotExist(err) {
+		t.Fatalf("managed duplicate should be removed, stat err=%v", err)
+	}
+}

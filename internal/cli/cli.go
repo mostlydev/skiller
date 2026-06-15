@@ -26,6 +26,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runInstall(args[1:], stdout)
 	case "uninstall":
 		return runUninstall(args[1:], stdout)
+	case "cleanup-duplicates":
+		return runCleanupDuplicates(args[1:], stdout)
 	case "status":
 		return runStatus(args[1:], stdout)
 	case "conflicts":
@@ -212,6 +214,47 @@ func runUninstall(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runCleanupDuplicates(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller cleanup-duplicates", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("cleanup-duplicates currently requires --json")
+	}
+	if *manifest == "" {
+		return fmt.Errorf("cleanup-duplicates requires --manifest")
+	}
+	result, err := app.CleanupDuplicates(context.Background(), app.CleanupOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		StateDir:     *stateDir,
+		OnConflict:   *onConflict,
+		LockTimeout:  *lockTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(stdout, result); err != nil {
+		return err
+	}
+	if failed, blocked := countFailedBlocked(result); failed > 0 || blocked > 0 {
+		return actionStatusError{failed: failed, blocked: blocked}
+	}
+	return nil
+}
+
 func runStatus(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("skiller status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -333,6 +376,7 @@ func usage(w io.Writer) error {
   skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]
   skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]
   skiller uninstall --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]
+  skiller cleanup-duplicates --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--lock-timeout DURATION]
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
   skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]`)

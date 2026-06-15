@@ -400,6 +400,65 @@ func TestUninstallSkipsSharedUnlessExplicit(t *testing.T) {
 	}
 }
 
+func TestCleanupDuplicatesRemovesOnlyManagedSymlinks(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "talking-stick")
+	manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+	managedDuplicate := filepath.Join(home, ".codex", "skills", "talking-stick")
+	copyDuplicate := filepath.Join(home, ".grok", "skills", "talking-stick")
+	foreignSource := filepath.Join(t.TempDir(), "foreign")
+	foreignDuplicate := filepath.Join(home, ".config", "opencode", "skills", "talking-stick")
+	if err := os.MkdirAll(filepath.Dir(managedDuplicate), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(src, managedDuplicate); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	copyDir(t, src, copyDuplicate)
+	if err := os.MkdirAll(foreignSource, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(foreignSource, "SKILL.md"), []byte("---\nname: talking-stick\n---\n\nforeign\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(foreignDuplicate), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(foreignSource, foreignDuplicate); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := CleanupDuplicates(context.Background(), CleanupOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertApplyResultSchema(t, result)
+	var removed int
+	for _, action := range result.Actions {
+		if action.Status == "removed" {
+			removed++
+		}
+	}
+	if removed != 1 {
+		t.Fatalf("removed actions = %d, want exactly one managed duplicate removed; actions=%#v", removed, result.Actions)
+	}
+	if _, err := os.Lstat(managedDuplicate); !os.IsNotExist(err) {
+		t.Fatalf("managed duplicate should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(copyDuplicate, "SKILL.md")); err != nil {
+		t.Fatalf("copy duplicate should be preserved: %v", err)
+	}
+	if _, err := os.Lstat(foreignDuplicate); err != nil {
+		t.Fatalf("foreign symlink should be preserved: %v", err)
+	}
+}
+
 func assertApplyResultSchema(t *testing.T, result any) {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)

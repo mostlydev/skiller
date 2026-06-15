@@ -40,7 +40,9 @@
             "partially-satisfied",
             "satisfied-by-foreign",
             "remove-owned",
-            "skip-uninstall"
+            "skip-uninstall",
+            "remove-duplicate",
+            "skip-duplicate"
           ]
         },
         "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },

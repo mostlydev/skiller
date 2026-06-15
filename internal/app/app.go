@@ -14,6 +14,7 @@ import (
 	"github.com/mostlydev/skiller/pkg/manifest"
 	"github.com/mostlydev/skiller/pkg/observe"
 	planpkg "github.com/mostlydev/skiller/pkg/plan"
+	"github.com/mostlydev/skiller/pkg/prune"
 	"github.com/mostlydev/skiller/pkg/registry"
 	"github.com/mostlydev/skiller/pkg/source"
 	"github.com/mostlydev/skiller/pkg/state"
@@ -63,6 +64,16 @@ type UninstallOptions struct {
 	Shared       bool
 	All          bool
 	Force        bool
+}
+
+type CleanupOptions struct {
+	ManifestPath string
+	Home         string
+	Project      string
+	Namespace    string
+	StateDir     string
+	OnConflict   string
+	LockTimeout  time.Duration
 }
 
 type preparedPlan struct {
@@ -183,6 +194,41 @@ func Uninstall(ctx context.Context, opts UninstallOptions) (install.Result, erro
 		return install.Result{}, err
 	}
 	return result, nil
+}
+
+func CleanupDuplicates(ctx context.Context, opts CleanupOptions) (install.Result, error) {
+	onConflict := opts.OnConflict
+	if onConflict == "" {
+		onConflict = "block"
+	}
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
+		Home:         opts.Home,
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   onConflict,
+	})
+	if err != nil {
+		return install.Result{}, err
+	}
+	stateDir, err := state.ResolveDir(opts.StateDir)
+	if err != nil {
+		return install.Result{}, err
+	}
+	manager := lock.NewManager(stateDir)
+	if opts.LockTimeout > 0 {
+		manager = manager.WithTimeout(opts.LockTimeout)
+	}
+	locks, err := manager.AcquireTargets(ctx, applyLockIDs(prepared))
+	if err != nil {
+		return install.Result{}, err
+	}
+	defer locks.Release()
+	return prune.CleanupDuplicates(prune.Inputs{
+		Candidates:    prepared.Candidates,
+		SourcesBySpec: prepared.SourcesBySpec,
+		Namespace:     firstNonEmpty(prepared.Options.Namespace, prepared.Manifest.Namespace, prepared.Manifest.Owner),
+	}), nil
 }
 
 func Repair(ctx context.Context, opts RepairOptions) (state.Ledger, error) {
