@@ -304,6 +304,14 @@ sync remain safe without depending on the state ledger alone.
   acquire a per-target lock to serialize concurrent runs. Replacing a non-empty
   existing directory uses a staged replacement path and a best-effort rollback path,
   never an in-place partial copy.
+- **Lock before observe (TOCTOU)**: for a *mutating* command, the per-target write
+  lock(s) are acquired **before** `pkg/observe` scans, not just at apply time, and
+  held through apply. Otherwise a concurrent process could mutate a root between the
+  observe snapshot and the write, and the plan would apply against a stale `WorldState`.
+  When more than one target root is involved, lock ids are acquired in deterministic
+  sorted canonical order. No state or source-cache lock may be held while waiting for
+  target locks. Read-only commands (`plan`, `status`, `sources list`) take no target
+  write lock. See §12.
 
 ### 6.6 Improvements over current implementations
 
@@ -338,13 +346,23 @@ is a memory and conflict-resolution layer over target-local facts:
   filesystem inspection.
 
 The state file should stay small and human-inspectable: a single JSON file behind
-`pkg/state`, not SQLite in v1. It records the latest known view, not an append-only
+`pkg/state`, not SQLite in v1. Because the ledger is **global** (cross-target) while
+per-target locks only serialize one target, two skiller processes writing *different*
+targets could still race the same file. So `pkg/state` serializes every
+read-modify-write behind one global state lock (`state.json.lock`) and commits with a
+temp-file + atomic `rename`, never an in-place rewrite — a crash or concurrent writer
+leaves the prior valid ledger intact (and it is rebuildable regardless, per above). The
+state lock is held only for short ledger transactions: source/provenance updates finish
+and release it before any target-root locks are acquired, and target mutation updates take
+it only after the sorted target locks are already held. No code path waits for target locks
+while holding `state.json.lock`. The file records the latest known view, not an append-only
 event stream:
 
 ```text
 sources(id, owner, namespace, package_ref, version,
         source_kind, original_spec, canonical_uri, source_key, subdir,
-        pinned_ref, resolved_revision, local_cache_path,
+        pinned_ref, requested_checksum, resolved_revision, source_status,
+        local_cache_path,
         source_realpath, source_digest, fetched_at, discovered_at, last_seen_at)
 skills(id, canonical_id, namespace, name, install_slug, frontmatter_name,
        source_id, description, created_at, updated_at)
@@ -444,6 +462,19 @@ separate explicit replacement action. One trade-off `status` must surface, never
 the foreign copy — so the two are reported as distinct states, never collapsed into a
 single "installed".
 
+**Single ownership truth on `ours-legacy` adoption.** An `ours-legacy` target is the
+adopting tool's *own* prior install (its lineage is ours), so when skiller actually
+**materializes ownership** of it — the marker-upgrade and replace-as-owned rows of the
+table, where a `.skiller-install.json` is written — it also **removes the recognized
+legacy marker** (`.gnit-skill-managed`, `.our-managed.json`, …) so exactly one in-dir
+ownership marker remains and an old version of the legacy tool can't re-recognize and
+clobber the directory. The adopted-from lineage is preserved in the ledger, not by
+keeping the stale file. The marker cleanup happens only after the skiller marker or
+replacement has been written successfully; a failed cleanup leaves a repairable
+dual-marker state, not a half-owned foreign target. This cleanup applies **only** to
+`ours-legacy` markers; `foreign` markers are never touched (a no-op `adopt-existing`
+writes nothing at all, so it leaves both the directory and any marker untouched).
+
 ### 6.8 Namespaces and conflicts
 
 Claude plugins and marketplaces are real prior art: for example, Superpowers is
@@ -526,8 +557,9 @@ SourceSnapshot{
   original_spec,      // verbatim, for UX + audit
   canonical_uri,      // normalized identity, for dedupe + update
   source_key,         // stable hash of canonical origin + subdir + requested ref selector
-  subdir, pinned_ref, // selection + requested pin
+  subdir, pinned_ref, requested_checksum, // selection + requested pins
   resolved_revision,  // git SHA, or http ETag/Last-Modified + content digest
+  source_status,      // refreshed | cached | cached-unverified | offline
   local_cache_path,   // materialized working copy
   source_digest, fetched_at,
 }
@@ -552,7 +584,9 @@ explicit "unsupported source" error, never a guess.
 by `source_key`; the normal link/copy install then proceeds from there. Remote installs
 **default to copy** (a symlink into a re-fetchable cache is fragile); `link` is opt-in,
 warns, and points at a stable per-source materialized dir that `update` refreshes in
-place. Local-dir sources keep `link` as the default.
+place. Local-dir sources keep `link` as the default. Source-store writes use a per-source
+cache lock plus staged content and atomic rename, then release that lock before any
+target-root locks are acquired.
 
 **Update.** `skiller update [name|--all]` (and `skiller sources refresh`) re-resolves the
 recorded source, fetches, and compares `resolved_revision`/digest. A **pinned** ref
@@ -560,6 +594,19 @@ recorded source, fetches, and compares `resolved_revision`/digest. A **pinned** 
 (branch / default branch / a web URL) refreshes to the newest revision. Any change then
 flows through the **same** conflict/ownership machinery (§6.5–§6.8) — a locally modified
 copy is preserved unless `--force`. Apply is never special-cased for remote sources.
+
+**Offline & network failure.** A network/timeout failure while re-resolving a floating
+ref must not block an otherwise-applicable install or update. If a materialized snapshot
+already exists in the source store, skiller **falls back to the last cached snapshot**,
+proceeds, and surfaces a warning that the remote could not be refreshed (the install is
+from a possibly-stale cache; `resolved_revision` is marked unverified and Plan/status
+surface `source_status: cached-unverified`). A global `--offline` flag skips remote
+resolution entirely and uses the cache by contract (reported as `source_status: offline`,
+not a warning). If a source has **no** cached snapshot and the network is unavailable (or
+`--offline` is set), that one source is an explicit error — skiller never fabricates
+content — while other resolvable sources in the same run still proceed. A checksum-pinned
+source still verifies the cached snapshot against the requested checksum; mismatch is an
+error, not an offline fallback.
 
 **Multi-skill & security.** If a resolved source contains one `SKILL.md`, install it; if
 it contains several (`*/SKILL.md`), the plan lists all but requires `--all` or
@@ -586,7 +633,8 @@ skiller selfupdate [--check]
 ```
 
 Global flags: `--state-dir DIR`, `--home DIR`, `--project DIR`, `--namespace N`,
-`--on-conflict MODE`, `--interactive`, `--json`.
+`--on-conflict MODE`, `--interactive`, `--offline`, `--json`. `--offline` skips remote
+source resolution and uses the cached snapshot store (§6.9).
 
 - Every mutating command supports `plan`/`--dry-run` returning the same JSON `Plan`.
 - `uninstall` honors talking-stick's Option-B rule: single-target uninstall leaves the
@@ -669,7 +717,9 @@ behavior:
 - Project/global scope tests: `--global` maps named `agents` to `~/.agents/skills`,
   `--project DIR` maps it to `DIR/.agents/skills`, and `--target-dir` bypasses both.
 - Concurrent-run tests: two installers targeting the same skill serialize on the same
-  lock; two installers targeting disjoint roots do not unnecessarily block each other.
+  lock; two installers targeting disjoint roots do not unnecessarily block each other;
+  multi-target installs acquire locks in sorted order; source-cache/state locks are never
+  held while waiting for target locks.
 - Conformance: replay talking-stick install scenarios and diff results.
 
 ## 11. Roadmap
@@ -767,6 +817,11 @@ Build:
 - `data/sources.toml` host shorthands / detectors; GitHub/GitLab `/tree|/blob` web-URL
   normalizers; `//subdir`, `?ref=`, `?checksum=` grammar.
 - Materialized source store keyed by `source_key`; full provenance recorded in the ledger.
+- Per-source cache locks and staged atomic cache writes, released before target-root locks
+  are acquired.
+- Offline behavior: cached-snapshot fallback on network failure for floating refs, the
+  `--offline` flag, `source_status` reporting, checksum verification against cached
+  content, and `resolved_revision` unverified-marking (§6.9).
 - `skiller plan <source-spec> --json` resolves + fetches and shows the would-be install;
   `skiller sources list --json`; multi-skill selectors (`--all`/`--skill`). Still **no
   skill target writes** — cache/state writes are allowed, consistent with the pre-M2
@@ -986,7 +1041,14 @@ Gate:
   no-op / safe refresh / marker repair / modified-preserve / force replace.
 - **Locks:** use lock keys by canonical target root plus a short global plan/apply lock
   for registry/manifest resolution. The JSON plan should include lock ids and target
-  paths so dry runs show contention scope.
+  paths so dry runs show contention scope. A mutating command acquires its target-root
+  write lock(s) **before** `pkg/observe` and holds them through apply, so the planner
+  never applies against a stale `WorldState` (§6.5). Multiple target locks are acquired
+  in sorted canonical lock-id order. The global JSON ledger has its own `state.json.lock`
+  serializing every read-modify-write with a temp-file + atomic `rename`, because the
+  ledger is cross-target and per-target locks do not cover two processes writing different
+  targets (§6.7). `state.json.lock` and source-cache locks are short-lived and are never
+  held while waiting for target locks.
 - **Registry export:** embedded TOML remains authoritative. The CLI should expose
   `skiller registry --json` so non-Go consumers can inspect the exact registry used
   by the binary without parsing TOML or importing Go.
@@ -1041,6 +1103,30 @@ Gate:
   first-install trust confirmation unless `--yes`.
 - **Schema day-one, fetchers phased:** SourceSpec + provenance fields land in M0/M1; remote
   fetchers ship in M1b, before the writer.
+
+**Convergence review 4 (external review — Gemini) resolutions:**
+
+- **Lock before observe (TOCTOU):** a mutating command takes its target-root write
+  lock(s) before `pkg/observe`, not just at apply, so the plan can't be built on a
+  `WorldState` a concurrent process invalidates before the write (§6.5, §12 Locks).
+  Multiple target locks are acquired in sorted canonical order, and state/cache locks are
+  never held while waiting for target locks. Read-only commands stay target-lock-free.
+- **Ledger serialization:** the global JSON ledger is guarded by one `state.json.lock`
+  plus temp-file + atomic `rename`, since per-target locks don't stop two processes
+  writing different targets from racing the one cross-target file (§6.7).
+- **Offline / network-failure fallback:** a floating-ref refresh that fails on the
+  network falls back to the last cached snapshot with a warning (`resolved_revision`
+  unverified and `source_status: cached-unverified`); `--offline` skips remote resolution
+  by contract and reports `source_status: offline`; no cache + offline is an explicit
+  per-source error, never fabricated content. Checksum-pinned sources still verify cached
+  content (§6.9, lands with the M1b fetchers).
+- **Single ownership truth on adoption:** materializing ownership of an `ours-legacy`
+  target removes the recognized legacy marker and writes one `.skiller-install.json`,
+  recording lineage in the ledger. Cleanup happens only after successful skiller
+  marker/replacement write; `foreign` markers are never touched (§6.7, §9).
+- **Accepted as-is (no doc change):** Gemini's endorsement of observe/plan/apply purity,
+  data-driven `harnesses`/`markers`/`sources.toml`, explicit runtime target modes, the
+  Gemini-CLI removal, and the M0→M5 milestone order — all already in the design.
 
 ## 13. Naming (decided)
 
