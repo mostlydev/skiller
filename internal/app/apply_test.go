@@ -189,6 +189,70 @@ func TestApplyAdoptExistingWritesLedgerOnly(t *testing.T) {
 	}
 }
 
+func TestRepairRebuildsSatisfiedByForeignLedger(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "talking-stick")
+	target := filepath.Join(home, ".agents", "skills", "talking-stick")
+	copyDir(t, src, target)
+	manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+
+	ledger, err := Repair(context.Background(), RepairOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.Installs) != 1 {
+		t.Fatalf("installs = %#v, want one repaired install", ledger.Installs)
+	}
+	install := ledger.Installs[0]
+	if install.TargetPath != target || install.Status != "satisfied-by-foreign" || install.MarkerPath != "" {
+		t.Fatalf("install = %#v, want unmanaged satisfied-by-foreign repair at %q", install, target)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".skiller-install.json")); !os.IsNotExist(err) {
+		t.Fatalf("repair must not write skiller marker, stat err=%v", err)
+	}
+}
+
+func TestRepairRebuildsOwnedInstallAfterMissingState(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	opts := ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	}
+	if _, err := Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(stateDir, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	ledger, err := Repair(context.Background(), RepairOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		Project:      project,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
+	if len(ledger.Installs) != 1 || ledger.Installs[0].TargetPath != target || ledger.Installs[0].Status != "installed" {
+		t.Fatalf("installs = %#v, want repaired installed target %q", ledger.Installs, target)
+	}
+}
+
 func assertApplyResultSchema(t *testing.T, result any) {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)

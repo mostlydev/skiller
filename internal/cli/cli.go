@@ -28,6 +28,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runStatus(args[1:], stdout)
 	case "conflicts":
 		return runConflicts(args[1:], stdout)
+	case "state":
+		return runState(args[1:], stdout)
 	case "-h", "--help", "help":
 		return usage(stdout)
 	default:
@@ -229,13 +231,61 @@ func runConflictsList(args []string, stdout io.Writer) error {
 	return writeJSON(stdout, report)
 }
 
+func runState(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("state requires subcommand repair")
+	}
+	switch args[0] {
+	case "repair":
+		return runStateRepair(args[1:], stdout)
+	default:
+		return fmt.Errorf("unknown state subcommand %q", args[0])
+	}
+}
+
+func runStateRepair(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller state repair", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("state repair currently requires --json")
+	}
+	if *manifest == "" {
+		return fmt.Errorf("state repair requires --manifest")
+	}
+	ledger, err := app.Repair(context.Background(), app.RepairOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		StateDir:     *stateDir,
+		OnConflict:   *onConflict,
+		LockTimeout:  *lockTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, ledger)
+}
+
 func usage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, `Usage:
   skiller registry --json
   skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]
   skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]
   skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
-  skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]`)
+  skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
+  skiller state repair --manifest skiller.toml --json [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--lock-timeout DURATION]`)
 	return err
 }
 

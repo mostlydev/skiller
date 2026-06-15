@@ -42,6 +42,16 @@ type ApplyOptions struct {
 	InstallerVersion string
 }
 
+type RepairOptions struct {
+	ManifestPath string
+	Home         string
+	Project      string
+	Namespace    string
+	StateDir     string
+	OnConflict   string
+	LockTimeout  time.Duration
+}
+
 type preparedPlan struct {
 	Manifest        manifest.Manifest
 	Catalog         registry.Catalog
@@ -112,6 +122,51 @@ func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 		return install.Result{}, err
 	}
 	return result, nil
+}
+
+func Repair(ctx context.Context, opts RepairOptions) (state.Ledger, error) {
+	onConflict := opts.OnConflict
+	if onConflict == "" {
+		onConflict = "block"
+	}
+	prepared, err := preparePlan(Options{
+		ManifestPath: opts.ManifestPath,
+		Home:         opts.Home,
+		Project:      opts.Project,
+		Namespace:    opts.Namespace,
+		OnConflict:   onConflict,
+	})
+	if err != nil {
+		return state.Ledger{}, err
+	}
+	stateDir, err := state.ResolveDir(opts.StateDir)
+	if err != nil {
+		return state.Ledger{}, err
+	}
+	manager := lock.NewManager(stateDir)
+	if opts.LockTimeout > 0 {
+		manager = manager.WithTimeout(opts.LockTimeout)
+	}
+	locks, err := manager.AcquireTargets(ctx, applyLockIDs(prepared))
+	if err != nil {
+		return state.Ledger{}, err
+	}
+	defer locks.Release()
+	world := observePrepared(prepared)
+	plan := buildPreparedPlan(prepared, world)
+	planpkg.Sort(&plan)
+	if err := state.Commit(ctx, state.CommitOptions{Dir: stateDir, LockTimeout: opts.LockTimeout}, func(ledger *state.Ledger) error {
+		*ledger = state.Empty()
+		repairLedger(ledger, plan)
+		return nil
+	}); err != nil {
+		return state.Ledger{}, err
+	}
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		return state.Ledger{}, err
+	}
+	return loaded.Ledger, nil
 }
 
 func Status(opts StatusOptions) (status.Report, error) {
@@ -342,6 +397,50 @@ func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install
 	}
 }
 
+func repairLedger(ledger *state.Ledger, plan contract.Plan) {
+	sourcesByID := map[string]contract.SourceSnapshot{}
+	for _, source := range plan.Sources {
+		sourcesByID[source.ID] = source
+		upsertSource(ledger, source)
+	}
+	for _, action := range plan.Actions {
+		if action.Skill == nil {
+			continue
+		}
+		switch action.Action {
+		case "no-op":
+			upsertSkill(ledger, *action.Skill)
+			upsertInstall(ledger, actionResultFromPlan(action, "installed"), action, sourcesByID)
+		case "adopt-existing":
+			upsertSkill(ledger, *action.Skill)
+			upsertInstall(ledger, actionResultFromPlan(action, "skipped"), action, sourcesByID)
+		case "satisfied-by-foreign":
+			upsertSkill(ledger, *action.Skill)
+			upsertInstall(ledger, actionResultFromPlan(action, "satisfied-by-foreign"), action, sourcesByID)
+		case "refresh":
+			upsertSkill(ledger, *action.Skill)
+			upsertInstall(ledger, actionResultFromPlan(action, "stale"), action, sourcesByID)
+		}
+	}
+	for _, conflict := range plan.Conflicts {
+		upsertConflict(ledger, conflict)
+	}
+}
+
+func actionResultFromPlan(action contract.PlanAction, status string) install.ActionResult {
+	return install.ActionResult{
+		ID:            action.ID,
+		Action:        action.Action,
+		Status:        status,
+		Reason:        action.Reason,
+		Target:        action.Target,
+		Skill:         action.Skill,
+		Extra:         action.Extra,
+		RequestedMode: action.Mode.Requested,
+		EffectiveMode: action.Mode.Effective,
+	}
+}
+
 func isLedgerOnlyAdoption(action string) bool {
 	return action == "adopt-existing" || action == "satisfied-by-foreign"
 }
@@ -398,7 +497,7 @@ func upsertInstall(ledger *state.Ledger, action install.ActionResult, planned co
 		TargetKind:               action.Target.Kind,
 		TargetID:                 action.Target.ID,
 		TargetPath:               action.Target.Path,
-		Mode:                     firstNonEmpty(action.EffectiveMode, action.RequestedMode, "copy"),
+		Mode:                     installMode(action, planned.Ownership),
 		Scope:                    action.Target.Scope,
 		MarkerPath:               markerPath(action, planned.Ownership),
 		InstalledDigestAtInstall: installedDigest(action, planned, source),
@@ -414,6 +513,16 @@ func upsertInstall(ledger *state.Ledger, action install.ActionResult, planned co
 		}
 	}
 	ledger.Installs = append(ledger.Installs, record)
+}
+
+func installMode(action install.ActionResult, ownership contract.ObservedOwnership) string {
+	if ownership.Class != "" && ownership.Class != "absent" {
+		if ownership.Class == "ours-symlink" || ownership.SourceRealpath != "" {
+			return "link"
+		}
+		return "copy"
+	}
+	return firstNonEmpty(action.EffectiveMode, action.RequestedMode, "copy")
 }
 
 func installLedgerStatus(action install.ActionResult) string {

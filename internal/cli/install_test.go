@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mostlydev/skiller/internal/schemajson"
 	"github.com/mostlydev/skiller/pkg/install"
+	statepkg "github.com/mostlydev/skiller/pkg/state"
 )
 
 func TestInstallDryRunMatchesPlan(t *testing.T) {
@@ -54,5 +56,34 @@ func TestInstallWritesResultAndReturnsErrorForBlockedAction(t *testing.T) {
 	}
 	if blocked == 0 {
 		t.Fatalf("result has no blocked action: %#v", result.Actions)
+	}
+}
+
+func TestStateRepairWritesStateLedger(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
+	home := t.TempDir()
+	project := t.TempDir()
+	stateDir := t.TempDir()
+	var installOut bytes.Buffer
+	if err := Run([]string{"install", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &installOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := os.Remove(filepath.Join(stateDir, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	var repairOut bytes.Buffer
+	if err := Run([]string{"state", "repair", "--manifest", manifest, "--home", home, "--project", project, "--state-dir", stateDir, "--json"}, &repairOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("state repair: %v", err)
+	}
+	if err := schemajson.Validate("state.schema.json", repairOut.Bytes()); err != nil {
+		t.Fatalf("state schema: %v\n%s", err, repairOut.String())
+	}
+	var ledger statepkg.Ledger
+	if err := json.Unmarshal(repairOut.Bytes(), &ledger); err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.Installs) != 1 || ledger.Installs[0].Status != "installed" {
+		t.Fatalf("installs = %#v, want one repaired installed target", ledger.Installs)
 	}
 }
