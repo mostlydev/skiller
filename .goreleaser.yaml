@@ -1,9 +1,14 @@
+# Requires GoReleaser >= v2.4.0 (archives `formats` / `format_overrides.formats`).
 version: 2
 
 project_name: skiller
 
 gomod:
-  proxy: true
+  # Build from the local source tree, not a proxy-downloaded module copy. proxy:true
+  # requires the tag to be fetchable via proxy.golang.org, which fails for a private
+  # repo and is flaky on a freshly pushed tag. Revisit once skiller is a published,
+  # go-gettable module and we want verifiable proxy builds.
+  proxy: false
 
 builds:
   - id: skiller
