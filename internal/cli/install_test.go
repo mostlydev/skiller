@@ -90,6 +90,33 @@ func TestPlanRenameInstallSlugFlag(t *testing.T) {
 	}
 }
 
+func TestPlanForceFlag(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "talking-stick.toml")
+	home := "/skiller/golden/home"
+	var stdout bytes.Buffer
+	err := Run([]string{
+		"plan",
+		"--manifest", manifest,
+		"--home", home,
+		"--on-conflict", "force-replace",
+		"--force",
+		"--json",
+	}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("plan force-replace: %v", err)
+	}
+	if err := schemajson.Validate("plan.schema.json", stdout.Bytes()); err != nil {
+		t.Fatalf("plan schema: %v\n%s", err, stdout.String())
+	}
+	var plan contract.Plan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Inputs.Force {
+		t.Fatalf("force input = false, want true")
+	}
+}
+
 func TestStateRepairWritesStateLedger(t *testing.T) {
 	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "clawdapus-runtime.toml")
 	home := t.TempDir()

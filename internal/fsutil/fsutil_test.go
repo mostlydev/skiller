@@ -86,6 +86,7 @@ func TestSweepOrphansRemovesOnlySkillerStagesAndBackups(t *testing.T) {
 	parent := t.TempDir()
 	writeFile(t, filepath.Join(parent, ".skiller-stage-old", "x"), "x")
 	writeFile(t, filepath.Join(parent, ".skiller-backup-old", "x"), "x")
+	writeFile(t, filepath.Join(parent, ".skiller-replaced-old", "x"), "x")
 	writeFile(t, filepath.Join(parent, "skill", "SKILL.md"), "keep")
 	if err := SweepOrphans(parent); err != nil {
 		t.Fatal(err)
@@ -96,7 +97,32 @@ func TestSweepOrphansRemovesOnlySkillerStagesAndBackups(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(parent, ".skiller-backup-old")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("backup should be removed, err=%v", err)
 	}
+	assertFile(t, filepath.Join(parent, ".skiller-replaced-old", "x"), "x")
 	assertFile(t, filepath.Join(parent, "skill", "SKILL.md"), "keep")
+}
+
+func TestCopyDirRetainBackupSurvivesSweep(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	writeFile(t, filepath.Join(source, "SKILL.md"), "new\n")
+	writeFile(t, filepath.Join(target, "SKILL.md"), "old\n")
+	writeFile(t, filepath.Join(target, "local.txt"), "operator notes\n")
+
+	result, err := CopyDirRetainBackup(source, target, nil, testOptions("kept"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BackupPath == "" || filepath.Base(result.BackupPath) != ".skiller-replaced-kept" {
+		t.Fatalf("backup path = %q, want retained replacement backup", result.BackupPath)
+	}
+	assertFile(t, filepath.Join(target, "SKILL.md"), "new\n")
+	assertFile(t, filepath.Join(result.BackupPath, "SKILL.md"), "old\n")
+	assertFile(t, filepath.Join(result.BackupPath, "local.txt"), "operator notes\n")
+	if err := SweepOrphans(root); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(result.BackupPath, "SKILL.md"), "old\n")
 }
 
 func testOptions(suffix string) Options {

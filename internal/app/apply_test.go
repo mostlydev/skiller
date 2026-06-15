@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mostlydev/skiller/internal/fsutil"
 	"github.com/mostlydev/skiller/internal/schemajson"
 	"github.com/mostlydev/skiller/pkg/install"
 	"github.com/mostlydev/skiller/pkg/state"
@@ -176,6 +178,114 @@ func TestApplyRenameResolutionInstallsExplicitSlug(t *testing.T) {
 	}
 	if len(loaded.Ledger.Installs) != 2 {
 		t.Fatalf("installs = %#v, want two ledger installs", loaded.Ledger.Installs)
+	}
+}
+
+func TestApplyForceReplaceForeignRetainsBackupAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "talking-stick")
+	target := filepath.Join(home, ".agents", "skills", "talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "local-notes.md"), []byte("operator edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+	opts := ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		OnConflict:   "force-replace",
+		Force:        true,
+		LockTimeout:  time.Second,
+	}
+
+	first, err := Apply(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Actions) != 1 || first.Actions[0].Action != "force-replace" || first.Actions[0].Status != "updated" {
+		t.Fatalf("first actions = %#v, want one updated force-replace", first.Actions)
+	}
+	assertApplyResultSchema(t, first)
+	backup := first.Actions[0].BackupPath
+	if backup == "" || !strings.HasPrefix(filepath.Base(backup), ".skiller-replaced-") {
+		t.Fatalf("backup path = %q, want retained .skiller-replaced-* path", backup)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".skiller-install.json")); err != nil {
+		t.Fatalf("skiller marker missing after force-replace: %v", err)
+	}
+	assertFileContent(t, filepath.Join(backup, "SKILL.md"), "---\nname: local-talking-stick\n---\n\nlocal\n")
+	assertFileContent(t, filepath.Join(backup, "local-notes.md"), "operator edit\n")
+	if err := fsutil.SweepOrphans(filepath.Dir(target)); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContent(t, filepath.Join(backup, "local-notes.md"), "operator edit\n")
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Installs) != 1 || loaded.Ledger.Installs[0].BackupPath != backup {
+		t.Fatalf("installs = %#v, want retained backup path %q", loaded.Ledger.Installs, backup)
+	}
+
+	beforeBackups := retainedBackups(t, filepath.Dir(target))
+	second, err := Apply(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Actions) != 1 || second.Actions[0].Action != "no-op" || second.Actions[0].Status != "skipped" {
+		t.Fatalf("second actions = %#v, want quiet no-op", second.Actions)
+	}
+	afterBackups := retainedBackups(t, filepath.Dir(target))
+	if len(beforeBackups) != 1 || len(afterBackups) != 1 || beforeBackups[0] != afterBackups[0] {
+		t.Fatalf("backups changed on idempotent re-apply: before=%#v after=%#v", beforeBackups, afterBackups)
+	}
+	loaded, err = state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Installs) != 1 {
+		t.Fatalf("installs = %#v, want one ledger row after re-apply", loaded.Ledger.Installs)
+	}
+}
+
+func TestApplyForceReplaceForeignRequiresForce(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "talking-stick")
+	target := filepath.Join(home, ".agents", "skills", "talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := writeSingleSkillManifest(t, "talking-stick", "mostlydev:talking-stick", "talking-stick", src)
+	result, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		OnConflict:   "force-replace",
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Status != "blocked" {
+		t.Fatalf("actions = %#v, want blocked force-replace without force", result.Actions)
+	}
+	if result.Actions[0].Reason != "force-replace resolution requires --force" {
+		t.Fatalf("reason = %q", result.Actions[0].Reason)
+	}
+	assertFileContent(t, filepath.Join(target, "SKILL.md"), "---\nname: local-talking-stick\n---\n\nlocal\n")
+	if backups := retainedBackups(t, filepath.Dir(target)); len(backups) != 0 {
+		t.Fatalf("backups = %#v, want none for refused force-replace", backups)
 	}
 }
 
@@ -773,6 +883,32 @@ func findResultSkill(result install.Result, canonicalID, targetPath string) *ins
 		}
 	}
 	return nil
+}
+
+func retainedBackups(t *testing.T, parent string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backups []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".skiller-replaced-") {
+			backups = append(backups, filepath.Join(parent, entry.Name()))
+		}
+	}
+	return backups
+}
+
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != want {
+		t.Fatalf("%s = %q, want %q", path, data, want)
+	}
 }
 
 func assertApplyResultSchema(t *testing.T, result any) {

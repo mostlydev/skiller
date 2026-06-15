@@ -91,6 +91,7 @@ type PlanInputs struct {
 	Project      string `json:"project,omitempty"`
 	Namespace    string `json:"namespace,omitempty"`
 	InstallSlug  string `json:"install_slug,omitempty"`
+	Force        bool   `json:"force,omitempty"`
 	OnConflict   string `json:"on_conflict"`
 }
 

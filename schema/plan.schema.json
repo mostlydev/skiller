@@ -20,6 +20,7 @@
         "project": { "type": "string" },
         "namespace": { "type": "string" },
         "install_slug": { "type": "string" },
+        "force": { "type": "boolean" },
         "on_conflict": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" }
       }
     },
@@ -54,6 +55,7 @@
             "install-extra",
             "no-op",
             "refresh",
+            "force-replace",
             "adopt-existing",
             "block-conflict",
             "partially-satisfied",
@@ -164,7 +166,7 @@
       "additionalProperties": false,
       "required": ["kind", "path"],
       "properties": {
-        "kind": { "enum": ["link", "copy", "file", "marker", "sidecar-marker", "remove", "remove-legacy-marker"] },
+        "kind": { "enum": ["link", "copy", "file", "marker", "sidecar-marker", "remove", "remove-legacy-marker", "retained-backup"] },
         "path": { "type": "string", "minLength": 1 }
       }
     },

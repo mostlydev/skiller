@@ -32,6 +32,7 @@ type Options struct {
 	Project      string
 	Namespace    string
 	InstallSlug  string
+	Force        bool
 	OnConflict   string
 	Resolutions  map[string]Resolution
 }
@@ -44,13 +45,14 @@ type Resolution struct {
 var allConflictModes = []string{"block", "skip", "adopt-existing", "replace-owned", "rename", "force-replace"}
 
 type builder struct {
-	in            Inputs
-	conflicts     []contract.PlanConflict
-	actions       []contract.PlanAction
-	diagnostics   []contract.Diagnostic
-	actionKeys    map[string]bool
-	desiredByPath map[string]string
-	frontmatter   map[string]frontmatterClaim
+	in                          Inputs
+	conflicts                   []contract.PlanConflict
+	actions                     []contract.PlanAction
+	diagnostics                 []contract.Diagnostic
+	actionKeys                  map[string]bool
+	desiredByPath               map[string]string
+	frontmatter                 map[string]frontmatterClaim
+	globalForceReplaceConflicts int
 }
 
 type frontmatterClaim struct {
@@ -62,10 +64,11 @@ func Build(in Inputs) Plan {
 		in.Options.OnConflict = "block"
 	}
 	b := &builder{
-		in:            in,
-		actionKeys:    map[string]bool{},
-		desiredByPath: map[string]string{},
-		frontmatter:   map[string]frontmatterClaim{},
+		in:                          in,
+		actionKeys:                  map[string]bool{},
+		desiredByPath:               map[string]string{},
+		frontmatter:                 map[string]frontmatterClaim{},
+		globalForceReplaceConflicts: countGlobalForceReplaceConflicts(in),
 	}
 	for _, candidate := range in.Candidates {
 		b.planCandidate(candidate)
@@ -83,6 +86,7 @@ func Build(in Inputs) Plan {
 			Project:      in.Options.Project,
 			Namespace:    b.namespace(),
 			InstallSlug:  in.Options.InstallSlug,
+			Force:        in.Options.Force,
 			OnConflict:   in.Options.OnConflict,
 		},
 		Sources:     in.Sources,
@@ -90,6 +94,25 @@ func Build(in Inputs) Plan {
 		Conflicts:   b.conflicts,
 		Diagnostics: b.diagnostics,
 	}
+}
+
+func countGlobalForceReplaceConflicts(in Inputs) int {
+	if strings.TrimSpace(in.Options.OnConflict) != "force-replace" {
+		return 0
+	}
+	b := &builder{in: in}
+	seen := map[string]bool{}
+	for _, candidate := range in.Candidates {
+		if !policyApplies(b.forceReplaceConflictStatus(candidate), "force-replace") {
+			continue
+		}
+		key := candidate.Target.Path
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+	}
+	return len(seen)
 }
 
 func (b *builder) planCandidate(candidate target.Candidate) {
@@ -229,6 +252,35 @@ func (b *builder) planTargetAction(snapshot source.Snapshot, skill contract.Plan
 		return b.resolveConflict(action, conflict, target.Ref{}, nil)
 	}
 	return action
+}
+
+func (b *builder) forceReplaceConflictStatus(candidate target.Candidate) string {
+	skill := candidate.Skill
+	snapshot := b.in.SourcesBySpec[skill.Source]
+	namespace := b.namespace()
+	canonicalID := firstNonEmpty(skill.CanonicalID, namespace+":"+skill.Name)
+	targetRef := candidate.Target
+	raw := b.in.World.Observed[targetRef.Path]
+	ownership := b.classify(raw, targetRef.Path, snapshot.SourceRealpath, snapshot.SourceDigest, b.in.Manifest.Owner, canonicalID)
+	related := b.relatedDuplicateObservations(candidate, snapshot.SourceDigest, b.in.Manifest.Owner, canonicalID)
+	if partial := firstMatchingForeign(related); partial != nil && ownership.Class == "absent" {
+		return "partial-satisfaction"
+	}
+	switch ownership.Class {
+	case "ours-copy":
+		if ownership.DigestMatch != nil && *ownership.DigestMatch {
+			return ""
+		}
+		if strings.Contains(ownership.Message, "modified") {
+			return "modified-owned-copy"
+		}
+	case "foreign-known", "foreign-unmanaged":
+		if ownership.DigestMatch != nil && *ownership.DigestMatch {
+			return ""
+		}
+		return "foreign-target"
+	}
+	return ""
 }
 
 func (b *builder) classify(raw observe.RawObservation, path, sourceRealpath, desiredDigest, owner, canonicalID string) contract.ObservedOwnership {
@@ -375,7 +427,7 @@ func (b *builder) addConflict(conflict contract.PlanConflict) {
 
 func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.PlanConflict, duplicateRef target.Ref, duplicateObs *contract.ObservedOwnership) contract.PlanAction {
 	action.ConflictModes = conflict.SafeChoices
-	policy := b.resolutionPolicy(conflict)
+	policy, perConflict := b.resolutionPolicy(conflict)
 	if policy == "" || policy == "prompt" || policy == "block" {
 		b.addConflict(conflict)
 		return action
@@ -385,6 +437,18 @@ func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.
 		action.Reason = b.inapplicableResolutionReason(conflict.Status, policy)
 		b.addConflict(conflict)
 		return action
+	}
+	if policy == "force-replace" {
+		if !b.in.Options.Force {
+			action.Reason = "force-replace resolution requires --force"
+			b.addConflict(conflict)
+			return action
+		}
+		if !perConflict && b.globalForceReplaceConflicts > 1 {
+			action.Reason = "global force-replace refused for multiple destructive conflicts; use per-conflict resolutions"
+			b.addConflict(conflict)
+			return action
+		}
 	}
 	resolved.Resolution = policy
 	action.ConflictModes = nil
@@ -409,6 +473,22 @@ func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.
 		action.Status = "dry-run"
 		action.Reason = "owned copy replaced by resolution"
 		action.PlannedWrites = []contract.PlannedWrite{{Kind: action.Mode.Effective, Path: action.Target.Path}}
+	case "force-replace":
+		if conflict.Status == "modified-owned-copy" {
+			action.Action = "refresh"
+			action.Status = "dry-run"
+			action.Reason = "owned copy replaced by force-replace resolution"
+			action.PlannedWrites = []contract.PlannedWrite{{Kind: action.Mode.Effective, Path: action.Target.Path}}
+		} else {
+			action.Action = "force-replace"
+			action.Status = "dry-run"
+			action.Reason = "foreign target replaced by force-replace resolution with retained backup"
+			action.Mode.Effective = "copy"
+			action.PlannedWrites = []contract.PlannedWrite{
+				{Kind: "copy", Path: action.Target.Path},
+				{Kind: "marker", Path: filepath.Join(action.Target.Path, ".skiller-install.json")},
+			}
+		}
 	}
 	b.addConflict(resolved)
 	return action
@@ -425,19 +505,19 @@ func (b *builder) inapplicableResolutionReason(status, policy string) string {
 		}
 		return "renamed target still conflicts after applying install_slug"
 	case "force-replace":
-		return "force-replace resolution requires destructive writer support"
+		return "resolution force-replace is not applicable to " + status
 	default:
 		return "resolution " + policy + " is not applicable to " + status
 	}
 }
 
-func (b *builder) resolutionPolicy(conflict contract.PlanConflict) string {
+func (b *builder) resolutionPolicy(conflict contract.PlanConflict) (string, bool) {
 	if b.in.Options.Resolutions != nil {
 		if resolution, ok := b.in.Options.Resolutions[conflict.ID]; ok && strings.TrimSpace(resolution.Policy) != "" {
-			return strings.TrimSpace(resolution.Policy)
+			return strings.TrimSpace(resolution.Policy), true
 		}
 	}
-	return strings.TrimSpace(b.in.Options.OnConflict)
+	return strings.TrimSpace(b.in.Options.OnConflict), false
 }
 
 func applicableConflictModes(status string) []string {
@@ -467,6 +547,8 @@ func policyApplies(status, policy string) bool {
 		return status == "foreign-target" || status == "partial-satisfaction"
 	case "replace-owned":
 		return status == "modified-owned-copy"
+	case "force-replace":
+		return status == "modified-owned-copy" || status == "foreign-target"
 	default:
 		return false
 	}
@@ -503,7 +585,7 @@ func (b *builder) applyFrontmatterCollision(action contract.PlanAction, skill co
 
 func actionProvidesVisibleSkill(action contract.PlanAction) bool {
 	switch action.Action {
-	case "install-link", "install-copy", "refresh", "adopt-existing", "satisfied-by-foreign":
+	case "install-link", "install-copy", "refresh", "force-replace", "adopt-existing", "satisfied-by-foreign":
 		return true
 	case "no-op":
 		return action.Ownership.Class != "absent"

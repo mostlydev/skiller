@@ -104,6 +104,7 @@
         "source_digest_at_install": { "type": "string" },
         "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },
         "legacy_adapter": { "type": "string" },
+        "backup_path": { "type": "string" },
         "installed_at": { "$ref": "#/$defs/timestamp" },
         "updated_at": { "$ref": "#/$defs/timestamp" },
         "last_seen_at": { "$ref": "#/$defs/timestamp" }

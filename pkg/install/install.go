@@ -46,6 +46,7 @@ type ActionResult struct {
 	RequestedMode   string                  `json:"requested_mode,omitempty"`
 	EffectiveMode   string                  `json:"effective_mode,omitempty"`
 	FallbackApplied bool                    `json:"fallback_applied,omitempty"`
+	BackupPath      string                  `json:"backup_path,omitempty"`
 	Writes          []contract.PlannedWrite `json:"writes,omitempty"`
 	Error           string                  `json:"error,omitempty"`
 }
@@ -143,6 +144,23 @@ func applyAction(action contract.PlanAction, sources map[string]contract.SourceS
 		}
 		out.EffectiveMode = result.Effective
 		out.Writes = writesFor(action, "copy")
+		return out
+	case "force-replace":
+		source, ok := sources[action.SourceID]
+		if !ok {
+			return failed(out, "missing source "+action.SourceID)
+		}
+		result, err := fsutil.CopyDirRetainBackup(source.LocalCachePath, action.Target.Path, markerMutator(action, source, plan, opts), opts.FS)
+		if err != nil {
+			return failed(out, err.Error())
+		}
+		out.Status = "updated"
+		out.EffectiveMode = "copy"
+		out.BackupPath = result.BackupPath
+		out.Writes = writesFor(action, "copy")
+		if result.BackupPath != "" {
+			out.Writes = append(out.Writes, contract.PlannedWrite{Kind: "retained-backup", Path: result.BackupPath})
+		}
 		return out
 	case "install-extra":
 		if action.Extra == nil {

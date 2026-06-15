@@ -69,6 +69,7 @@ func runPlan(args []string, stdout io.Writer) error {
 	namespace := fs.String("namespace", "", "namespace override")
 	installSlug := fs.String("install-slug", "", "install slug for rename conflict resolution")
 	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	force := fs.Bool("force", false, "allow force-replace conflict resolution")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -85,6 +86,7 @@ func runPlan(args []string, stdout io.Writer) error {
 		Project:      *project,
 		Namespace:    *namespace,
 		InstallSlug:  *installSlug,
+		Force:        *force,
 		OnConflict:   *onConflict,
 	})
 	if err != nil {
@@ -104,6 +106,7 @@ func runInstall(args []string, stdout io.Writer) error {
 	stateDir := fs.String("state-dir", "", "state directory")
 	installSlug := fs.String("install-slug", "", "install slug for rename conflict resolution")
 	onConflict := fs.String("on-conflict", "block", "conflict mode")
+	force := fs.Bool("force", false, "allow force-replace conflict resolution")
 	lockTimeout := fs.Duration("lock-timeout", 5*time.Second, "lock acquisition timeout")
 	dryRun := fs.Bool("dry-run", false, "return plan without writes")
 	jsonOut := fs.Bool("json", false, "write JSON")
@@ -123,6 +126,7 @@ func runInstall(args []string, stdout io.Writer) error {
 			Project:      *project,
 			Namespace:    *namespace,
 			InstallSlug:  *installSlug,
+			Force:        *force,
 			OnConflict:   *onConflict,
 		})
 		if err != nil {
@@ -137,6 +141,7 @@ func runInstall(args []string, stdout io.Writer) error {
 		Project:      *project,
 		Namespace:    *namespace,
 		InstallSlug:  *installSlug,
+		Force:        *force,
 		StateDir:     *stateDir,
 		OnConflict:   *onConflict,
 		LockTimeout:  *lockTimeout,
@@ -471,8 +476,8 @@ func runStateRepair(args []string, stdout io.Writer) error {
 func usage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, `Usage:
   skiller registry --json
-  skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--install-slug SLUG]
-  skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--install-slug SLUG] [--lock-timeout DURATION]
+  skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--install-slug SLUG] [--force]
+  skiller install --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE] [--install-slug SLUG] [--force] [--lock-timeout DURATION]
   skiller uninstall --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]
   skiller cleanup-duplicates --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--lock-timeout DURATION]
   skiller sync --manifest skiller.toml --json [--dry-run] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N] [--shared] [--all] [--force] [--lock-timeout DURATION]

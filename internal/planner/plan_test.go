@@ -238,6 +238,90 @@ func TestResolutionAdoptsForeignTargetWithoutClaimingDigestMatch(t *testing.T) {
 	assertStrings(t, conflict.SafeChoices, []string{"block", "skip", "adopt-existing", "rename", "force-replace"})
 }
 
+func TestForceReplaceRequiresForce(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".agents/skills/talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := mustPlanWithOptions(t, "talking-stick.toml", home, func(opts *Options) {
+		opts.OnConflict = "force-replace"
+	})
+	action := assertAction(t, plan, "mostlydev:talking-stick", target, "block-conflict")
+	if action.Reason != "force-replace resolution requires --force" {
+		t.Fatalf("reason = %q", action.Reason)
+	}
+	assertConflict(t, plan, "foreign-target", "")
+}
+
+func TestForceReplacePlansForeignReplacementWithForce(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".agents/skills/talking-stick")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := mustPlanWithOptions(t, "talking-stick.toml", home, func(opts *Options) {
+		opts.OnConflict = "force-replace"
+		opts.Force = true
+	})
+	action := assertAction(t, plan, "mostlydev:talking-stick", target, "force-replace")
+	if !plan.Inputs.Force {
+		t.Fatalf("plan input force = false, want true")
+	}
+	if action.Mode.Effective != "copy" {
+		t.Fatalf("effective mode = %q, want copy", action.Mode.Effective)
+	}
+	assertWrites(t, action.PlannedWrites, []contract.PlannedWrite{
+		{Kind: "copy", Path: target},
+		{Kind: "marker", Path: filepath.Join(target, ".skiller-install.json")},
+	})
+	assertConflict(t, plan, "foreign-target", "force-replace")
+}
+
+func TestGlobalForceReplaceRefusesMultipleTargets(t *testing.T) {
+	home := t.TempDir()
+	talkingStick := filepath.Join(home, ".agents/skills/talking-stick")
+	gnit := filepath.Join(home, ".agents/skills/gnit")
+	if err := os.MkdirAll(talkingStick, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(gnit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(talkingStick, "SKILL.md"), []byte("---\nname: local-talking-stick\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gnit, "SKILL.md"), []byte("---\nname: local-gnit\n---\n\nlocal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := writeTwoDistinctSkillManifest(t, fixturePath(t, "sources/talking-stick"), fixturePath(t, "sources/gnit"))
+	plan, err := Build(Options{
+		ManifestPath: manifest,
+		Home:         home,
+		OnConflict:   "force-replace",
+		Force:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	SortPlan(&plan)
+
+	for _, target := range []string{talkingStick, gnit} {
+		action := assertAnyActionAt(t, plan, target, "block-conflict")
+		if action.Reason != "global force-replace refused for multiple destructive conflicts; use per-conflict resolutions" {
+			t.Fatalf("reason = %q", action.Reason)
+		}
+	}
+}
+
 func TestRuntimeTargetDirDefaultsToCopy(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
@@ -441,6 +525,18 @@ func assertStrings(t *testing.T, got, want []string) {
 	}
 }
 
+func assertWrites(t *testing.T, got, want []contract.PlannedWrite) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("writes = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("writes = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func findExtraAction(plan contract.Plan, id string) *contract.PlanAction {
 	for i := range plan.Actions {
 		if plan.Actions[i].Extra != nil && plan.Actions[i].Extra.ID == id {
@@ -448,6 +544,20 @@ func findExtraAction(plan contract.Plan, id string) *contract.PlanAction {
 		}
 	}
 	return nil
+}
+
+func assertAnyActionAt(t *testing.T, plan contract.Plan, targetPath, actionName string) contract.PlanAction {
+	t.Helper()
+	for _, action := range plan.Actions {
+		if action.Target.Path == targetPath {
+			if action.Action != actionName {
+				t.Fatalf("action at %s = %s, want %s", targetPath, action.Action, actionName)
+			}
+			return action
+		}
+	}
+	t.Fatalf("missing action %s at %s; actions=%#v", actionName, targetPath, plan.Actions)
+	return contract.PlanAction{}
 }
 
 func copyDir(t *testing.T, src, dst string) {
@@ -522,6 +632,34 @@ func writeTwoSkillManifest(t *testing.T, firstSource, secondSource string) strin
 		"canonical_id = \"beta:talking-stick\"\n" +
 		"install_slug = \"talking-stick\"\n" +
 		"source = " + strconv.Quote(secondSource) + "\n" +
+		"targets = [\"agents\"]\n" +
+		"mode = \"link\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeTwoDistinctSkillManifest(t *testing.T, talkingStickSource, gnitSource string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "skiller.toml")
+	data := "schema = \"skiller-install.v1\"\n" +
+		"owner = \"multi-force-fixture\"\n" +
+		"namespace = \"mostlydev\"\n" +
+		"default_mode = \"link\"\n\n" +
+		"[[skills]]\n" +
+		"name = \"talking-stick\"\n" +
+		"canonical_id = \"mostlydev:talking-stick\"\n" +
+		"install_slug = \"talking-stick\"\n" +
+		"source = " + strconv.Quote(talkingStickSource) + "\n" +
+		"targets = [\"agents\"]\n" +
+		"mode = \"link\"\n\n" +
+		"[[skills]]\n" +
+		"name = \"gnit\"\n" +
+		"canonical_id = \"mostlydev:gnit\"\n" +
+		"install_slug = \"gnit\"\n" +
+		"source = " + strconv.Quote(gnitSource) + "\n" +
 		"targets = [\"agents\"]\n" +
 		"mode = \"link\"\n"
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {

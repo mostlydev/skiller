@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	stagePrefix  = ".skiller-stage-"
-	backupPrefix = ".skiller-backup-"
+	stagePrefix    = ".skiller-stage-"
+	backupPrefix   = ".skiller-backup-"
+	replacedPrefix = ".skiller-replaced-"
 )
 
 type Options struct {
@@ -58,6 +59,50 @@ func CopyDir(source, target string, mutate func(stage string) error, opts Option
 	}
 	result.BackupPath = backup
 	result.Writes = []string{target}
+	return result, nil
+}
+
+func CopyDirRetainBackup(source, target string, mutate func(stage string) error, opts Options) (Result, error) {
+	result := Result{TargetPath: target, Requested: "copy", Effective: "copy"}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return result, err
+	}
+	stage := siblingPath(target, stagePrefix, opts)
+	backup := siblingPath(target, replacedPrefix, opts)
+	if err := os.RemoveAll(stage); err != nil {
+		return result, err
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return result, err
+	}
+	targetExisted := true
+	if _, err := os.Lstat(target); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			targetExisted = false
+		} else {
+			return result, err
+		}
+	}
+	if err := copyTree(source, stage); err != nil {
+		_ = os.RemoveAll(stage)
+		return result, err
+	}
+	if mutate != nil {
+		if err := mutate(stage); err != nil {
+			_ = os.RemoveAll(stage)
+			return result, err
+		}
+	}
+	if err := promoteRetainBackup(stage, target, backup, opts.rename()); err != nil {
+		_ = os.RemoveAll(stage)
+		return result, err
+	}
+	if targetExisted {
+		result.BackupPath = backup
+		result.Writes = []string{backup, target}
+	} else {
+		result.Writes = []string{target}
+	}
 	return result, nil
 }
 
@@ -158,6 +203,31 @@ func promote(stage, target, backup string, rename func(string, string) error) er
 	}
 	if err := os.RemoveAll(backup); err != nil {
 		return err
+	}
+	bestEffortSyncDir(filepath.Dir(target))
+	return nil
+}
+
+func promoteRetainBackup(stage, target, backup string, rename func(string, string) error) error {
+	if _, err := os.Lstat(target); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if err := rename(stage, target); err != nil {
+				return renameErr(stage, target, err)
+			}
+			bestEffortSyncDir(filepath.Dir(target))
+			return nil
+		}
+		return err
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return err
+	}
+	if err := rename(target, backup); err != nil {
+		return renameErr(target, backup, err)
+	}
+	if err := rename(stage, target); err != nil {
+		_ = rename(backup, target)
+		return renameErr(stage, target, err)
 	}
 	bestEffortSyncDir(filepath.Dir(target))
 	return nil

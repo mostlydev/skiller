@@ -74,6 +74,7 @@ type InstallRecord struct {
 	SourceDigestAtInstall    string `json:"source_digest_at_install,omitempty"`
 	Status                   string `json:"status"`
 	LegacyAdapter            string `json:"legacy_adapter,omitempty"`
+	BackupPath               string `json:"backup_path,omitempty"`
 	InstalledAt              string `json:"installed_at,omitempty"`
 	UpdatedAt                string `json:"updated_at,omitempty"`
 	LastSeenAt               string `json:"last_seen_at,omitempty"`

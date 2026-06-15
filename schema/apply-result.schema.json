@@ -35,6 +35,7 @@
             "install-extra",
             "no-op",
             "refresh",
+            "force-replace",
             "adopt-existing",
             "block-conflict",
             "partially-satisfied",
@@ -53,6 +54,7 @@
         "requested_mode": { "enum": ["link", "copy"] },
         "effective_mode": { "enum": ["link", "copy"] },
         "fallback_applied": { "type": "boolean" },
+        "backup_path": { "type": "string" },
         "writes": {
           "type": "array",
           "items": { "$ref": "plan.schema.json#/$defs/planned_write" }

@@ -40,6 +40,7 @@ type ApplyOptions struct {
 	Project          string
 	Namespace        string
 	InstallSlug      string
+	Force            bool
 	StateDir         string
 	OnConflict       string
 	LockTimeout      time.Duration
@@ -168,6 +169,7 @@ func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 		Project:      opts.Project,
 		Namespace:    opts.Namespace,
 		InstallSlug:  opts.InstallSlug,
+		Force:        opts.Force,
 		OnConflict:   onConflict,
 	})
 	if err != nil {
@@ -978,6 +980,7 @@ func upsertInstall(ledger *state.Ledger, action install.ActionResult, planned co
 		SourceDigestAtInstall:    source.SourceDigest,
 		Status:                   installLedgerStatus(action),
 		LegacyAdapter:            planned.Ownership.LegacyAdapter,
+		BackupPath:               action.BackupPath,
 		LastSeenAt:               time.Now().UTC().Format(time.RFC3339),
 	}
 	for i := range ledger.Installs {
@@ -1021,11 +1024,11 @@ func installLedgerStatus(action install.ActionResult) string {
 }
 
 func installedDigest(action install.ActionResult, planned contract.PlanAction, source contract.SourceSnapshot) string {
-	if planned.Ownership.Digest != "" {
-		return planned.Ownership.Digest
-	}
 	if action.Status == "installed" || action.Status == "updated" {
 		return source.SourceDigest
+	}
+	if planned.Ownership.Digest != "" {
+		return planned.Ownership.Digest
 	}
 	return ""
 }
