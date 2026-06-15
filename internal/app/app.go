@@ -11,10 +11,20 @@ import (
 	planpkg "github.com/mostlydev/skiller/pkg/plan"
 	"github.com/mostlydev/skiller/pkg/registry"
 	"github.com/mostlydev/skiller/pkg/source"
+	"github.com/mostlydev/skiller/pkg/state"
+	"github.com/mostlydev/skiller/pkg/status"
 	"github.com/mostlydev/skiller/pkg/target"
 )
 
 type Options = planpkg.Options
+
+type StatusOptions struct {
+	ManifestPath string
+	Home         string
+	Project      string
+	Namespace    string
+	StateDir     string
+}
 
 func Plan(opts Options) (contract.Plan, error) {
 	if opts.OnConflict == "" {
@@ -82,6 +92,56 @@ func Plan(opts Options) (contract.Plan, error) {
 		World:           world,
 		Options:         opts,
 	}), nil
+}
+
+func Status(opts StatusOptions) (status.Report, error) {
+	stateLoad, err := state.Load(opts.StateDir)
+	if err != nil {
+		return status.Report{}, err
+	}
+	var planned *contract.Plan
+	if opts.ManifestPath != "" {
+		plan, err := Plan(Options{
+			ManifestPath: opts.ManifestPath,
+			Home:         opts.Home,
+			Project:      opts.Project,
+			Namespace:    opts.Namespace,
+			OnConflict:   "block",
+		})
+		if err != nil {
+			return status.Report{}, err
+		}
+		planpkg.Sort(&plan)
+		planned = &plan
+	}
+	return status.Build(status.Inputs{
+		Plan:        planned,
+		Ledger:      stateLoad.Ledger,
+		Diagnostics: stateLoad.Diagnostics,
+	}), nil
+}
+
+func Conflicts(opts StatusOptions) (status.ConflictReport, error) {
+	stateLoad, err := state.Load(opts.StateDir)
+	if err != nil {
+		return status.ConflictReport{}, err
+	}
+	var planned *contract.Plan
+	if opts.ManifestPath != "" {
+		plan, err := Plan(Options{
+			ManifestPath: opts.ManifestPath,
+			Home:         opts.Home,
+			Project:      opts.Project,
+			Namespace:    opts.Namespace,
+			OnConflict:   "block",
+		})
+		if err != nil {
+			return status.ConflictReport{}, err
+		}
+		planpkg.Sort(&plan)
+		planned = &plan
+	}
+	return status.Conflicts(planned, stateLoad.Ledger, stateLoad.Diagnostics), nil
 }
 
 func resolveHome(home string) (string, error) {

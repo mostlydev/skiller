@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/mostlydev/skiller/internal/app"
 	"github.com/mostlydev/skiller/internal/planner"
 )
 
@@ -18,6 +19,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runRegistry(args[1:], stdout)
 	case "plan":
 		return runPlan(args[1:], stdout)
+	case "status":
+		return runStatus(args[1:], stdout)
+	case "conflicts":
+		return runConflicts(args[1:], stdout)
 	case "-h", "--help", "help":
 		return usage(stdout)
 	default:
@@ -74,10 +79,80 @@ func runPlan(args []string, stdout io.Writer) error {
 	return writeJSON(stdout, plan)
 }
 
+func runStatus(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("status currently requires --json")
+	}
+	report, err := app.Status(app.StatusOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		StateDir:     *stateDir,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, report)
+}
+
+func runConflicts(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("conflicts requires subcommand list")
+	}
+	switch args[0] {
+	case "list":
+		return runConflictsList(args[1:], stdout)
+	default:
+		return fmt.Errorf("unknown conflicts subcommand %q", args[0])
+	}
+}
+
+func runConflictsList(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("skiller conflicts list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifest := fs.String("manifest", "", "manifest path")
+	home := fs.String("home", "", "home directory")
+	project := fs.String("project", "", "project directory")
+	namespace := fs.String("namespace", "", "namespace override")
+	stateDir := fs.String("state-dir", "", "state directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*jsonOut {
+		return fmt.Errorf("conflicts list currently requires --json")
+	}
+	report, err := app.Conflicts(app.StatusOptions{
+		ManifestPath: *manifest,
+		Home:         *home,
+		Project:      *project,
+		Namespace:    *namespace,
+		StateDir:     *stateDir,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, report)
+}
+
 func usage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, `Usage:
   skiller registry --json
-  skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]`)
+  skiller plan --manifest skiller.toml --json [--home DIR] [--project DIR] [--namespace N] [--on-conflict MODE]
+  skiller status --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]
+  skiller conflicts list --json [--manifest skiller.toml] [--state-dir DIR] [--home DIR] [--project DIR] [--namespace N]`)
 	return err
 }
 

@@ -1,0 +1,87 @@
+{
+  "schema": "skiller-status.v1",
+  "items": [
+    {
+      "canonical_id": "mostlydev:talking-stick",
+      "install_slug": "talking-stick",
+      "target": {
+        "id": "agents",
+        "kind": "shared",
+        "scope": "host",
+        "root": "/skiller/golden/home/.agents/skills",
+        "path": "/skiller/golden/home/.agents/skills/talking-stick",
+        "readers": [
+          "codex",
+          "antigravity",
+          "grok",
+          "opencode"
+        ],
+        "requested_targets": [
+          "agents"
+        ],
+        "lock_id": "target:4ca5b174bd530c5a"
+      },
+      "status": "not-installed",
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.agents/skills/talking-stick"
+      },
+      "source": {
+        "id": "source-001",
+        "source_kind": "file",
+        "original_spec": "../sources/talking-stick",
+        "canonical_uri": "file://<FIXTURES>/sources/talking-stick",
+        "source_key": "file:<redacted>",
+        "source_status": "refreshed",
+        "local_cache_path": "<FIXTURES>/sources/talking-stick",
+        "source_realpath": "<FIXTURES>/sources/talking-stick",
+        "source_digest": "sha256:eaeffc8d4f95472e3258eda06dc2ecf2af73c56f6a6b6ae7199e883575234083",
+        "frontmatter_name": "talking-stick",
+        "description": "Coordinate agent harnesses with the Talking Stick CLI."
+      }
+    },
+    {
+      "canonical_id": "mostlydev:talking-stick",
+      "install_slug": "talking-stick",
+      "target": {
+        "id": "claude-code",
+        "kind": "proprietary",
+        "scope": "host",
+        "root": "/skiller/golden/home/.claude/skills",
+        "path": "/skiller/golden/home/.claude/skills/talking-stick",
+        "readers": [
+          "claude-code"
+        ],
+        "requested_targets": [
+          "claude-code"
+        ],
+        "lock_id": "target:3726358a2c1fffef"
+      },
+      "status": "not-installed",
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.claude/skills/talking-stick"
+      },
+      "source": {
+        "id": "source-001",
+        "source_kind": "file",
+        "original_spec": "../sources/talking-stick",
+        "canonical_uri": "file://<FIXTURES>/sources/talking-stick",
+        "source_key": "file:<redacted>",
+        "source_status": "refreshed",
+        "local_cache_path": "<FIXTURES>/sources/talking-stick",
+        "source_realpath": "<FIXTURES>/sources/talking-stick",
+        "source_digest": "sha256:eaeffc8d4f95472e3258eda06dc2ecf2af73c56f6a6b6ae7199e883575234083",
+        "frontmatter_name": "talking-stick",
+        "description": "Coordinate agent harnesses with the Talking Stick CLI."
+      }
+    }
+  ],
+  "diagnostics": [
+    {
+      "level": "warning",
+      "message": "state ledger missing; rebuild recommended",
+      "path": "/skiller/golden/state/state.json"
+    }
+  ]
+}

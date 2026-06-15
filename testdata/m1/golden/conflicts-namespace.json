@@ -1,0 +1,32 @@
+{
+  "schema": "skiller-conflicts.v1",
+  "conflicts": [
+    {
+      "provenance": "live-plan",
+      "conflict": {
+        "id": "act-77da41bb637f5419",
+        "target_kind": "shared",
+        "target_id": "agents",
+        "effective_name": "debugging",
+        "existing_canonical_id": "alpha:debugging",
+        "desired_canonical_id": "beta:debugging",
+        "status": "namespace-collision",
+        "safe_choices": [
+          "block",
+          "skip",
+          "adopt-existing",
+          "replace-owned",
+          "rename",
+          "force-replace"
+        ]
+      }
+    }
+  ],
+  "diagnostics": [
+    {
+      "level": "warning",
+      "message": "state ledger missing; rebuild recommended",
+      "path": "/skiller/golden/state/state.json"
+    }
+  ]
+}

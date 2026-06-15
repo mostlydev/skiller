@@ -1,0 +1,22 @@
+{
+  "schema": "skiller-conflicts.v1",
+  "conflicts": [
+    {
+      "provenance": "ledger",
+      "conflict": {
+        "id": "ledger-conflict-001",
+        "target_kind": "shared",
+        "target_id": "agents",
+        "effective_name": "talking-stick",
+        "existing_canonical_id": "other:talking-stick",
+        "desired_canonical_id": "mostlydev:talking-stick",
+        "status": "foreign-target",
+        "safe_choices": [
+          "block",
+          "skip",
+          "adopt-existing"
+        ]
+      }
+    }
+  ]
+}
