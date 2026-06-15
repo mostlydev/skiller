@@ -1,4 +1,6 @@
-# Requires GoReleaser >= v2.4.0 (archives `formats` / `format_overrides.formats`).
+# Requires a recent GoReleaser v2 with the modern `archives.ids` / `archives.formats` /
+# `format_overrides.formats` fields (NOT present in v2.4.x). Validated with v2.16; the
+# release workflow pins `~> v2.16`.
 version: 2
 
 project_name: skiller
