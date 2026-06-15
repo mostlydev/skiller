@@ -99,11 +99,13 @@ func TestGoldenPlans(t *testing.T) {
 
 func TestM3ResolvedPlanGoldens(t *testing.T) {
 	cases := []struct {
-		name       string
-		manifest   string
-		onConflict string
+		name        string
+		manifest    string
+		onConflict  string
+		installSlug string
 	}{
-		{"namespace-skip", "namespace-collision.toml", "skip"},
+		{"namespace-skip", "namespace-collision.toml", "skip", ""},
+		{"namespace-rename", "namespace-collision.toml", "rename", "debugging-beta"},
 	}
 
 	fixturesAbs, err := filepath.Abs(filepath.Join("..", "..", "testdata", "m0"))
@@ -121,7 +123,7 @@ func TestM3ResolvedPlanGoldens(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			manifest := filepath.Join(fixturesAbs, "manifests", tc.manifest)
-			plan, err := Build(Options{ManifestPath: manifest, Home: home, OnConflict: tc.onConflict})
+			plan, err := Build(Options{ManifestPath: manifest, Home: home, OnConflict: tc.onConflict, InstallSlug: tc.installSlug})
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}

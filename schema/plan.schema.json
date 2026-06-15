@@ -19,6 +19,7 @@
         "home": { "type": "string" },
         "project": { "type": "string" },
         "namespace": { "type": "string" },
+        "install_slug": { "type": "string" },
         "on_conflict": { "$ref": "source-snapshot.schema.json#/$defs/conflict_resolution" }
       }
     },

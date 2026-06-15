@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mostlydev/skiller/internal/contract"
 	"github.com/mostlydev/skiller/internal/schemajson"
 	"github.com/mostlydev/skiller/pkg/install"
 	statepkg "github.com/mostlydev/skiller/pkg/state"
@@ -56,6 +57,36 @@ func TestInstallWritesResultAndReturnsErrorForBlockedAction(t *testing.T) {
 	}
 	if blocked == 0 {
 		t.Fatalf("result has no blocked action: %#v", result.Actions)
+	}
+}
+
+func TestPlanRenameInstallSlugFlag(t *testing.T) {
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "namespace-collision.toml")
+	home := "/skiller/golden/home"
+	var stdout bytes.Buffer
+	err := Run([]string{
+		"plan",
+		"--manifest", manifest,
+		"--home", home,
+		"--on-conflict", "rename",
+		"--install-slug", "debugging-beta",
+		"--json",
+	}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("plan rename: %v", err)
+	}
+	if err := schemajson.Validate("plan.schema.json", stdout.Bytes()); err != nil {
+		t.Fatalf("plan schema: %v\n%s", err, stdout.String())
+	}
+	var plan contract.Plan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Inputs.InstallSlug != "debugging-beta" {
+		t.Fatalf("install_slug = %q, want debugging-beta", plan.Inputs.InstallSlug)
+	}
+	if len(plan.Conflicts) != 0 {
+		t.Fatalf("conflicts = %#v, want none after rename", plan.Conflicts)
 	}
 }
 

@@ -1,0 +1,140 @@
+{
+  "schema": "skiller-plan.v1",
+  "operation": "plan",
+  "dry_run": true,
+  "inputs": {
+    "manifest_path": "<FIXTURES>/manifests/namespace-collision.toml",
+    "home": "/skiller/golden/home",
+    "namespace": "alpha",
+    "install_slug": "debugging-beta",
+    "on_conflict": "rename"
+  },
+  "sources": [
+    {
+      "id": "source-001",
+      "source_kind": "file",
+      "original_spec": "../sources/talking-stick",
+      "canonical_uri": "file://<FIXTURES>/sources/talking-stick",
+      "source_key": "file:<redacted>",
+      "source_status": "refreshed",
+      "local_cache_path": "<FIXTURES>/sources/talking-stick",
+      "source_realpath": "<FIXTURES>/sources/talking-stick",
+      "source_digest": "sha256:eaeffc8d4f95472e3258eda06dc2ecf2af73c56f6a6b6ae7199e883575234083",
+      "frontmatter_name": "talking-stick",
+      "description": "Coordinate agent harnesses with the Talking Stick CLI."
+    },
+    {
+      "id": "source-002",
+      "source_kind": "file",
+      "original_spec": "../sources/gnit",
+      "canonical_uri": "file://<FIXTURES>/sources/gnit",
+      "source_key": "file:<redacted>",
+      "source_status": "refreshed",
+      "local_cache_path": "<FIXTURES>/sources/gnit",
+      "source_realpath": "<FIXTURES>/sources/gnit",
+      "source_digest": "sha256:f9d6533ce861c6b8f7be9ba825979aba94ad0dc4b6d2acd1ec3b697c682cce61",
+      "frontmatter_name": "gnit",
+      "description": "Coordinate cross-repository changes with Gnit."
+    }
+  ],
+  "actions": [
+    {
+      "id": "act-6615ff02935113d0",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "alpha:debugging",
+        "namespace": "alpha",
+        "name": "debugging",
+        "install_slug": "debugging",
+        "frontmatter_name": "talking-stick",
+        "description": "Coordinate agent harnesses with the Talking Stick CLI.",
+        "requested_targets": [
+          "agents"
+        ]
+      },
+      "source_id": "source-001",
+      "target": {
+        "id": "agents",
+        "kind": "shared",
+        "scope": "host",
+        "root": "/skiller/golden/home/.agents/skills",
+        "path": "/skiller/golden/home/.agents/skills/debugging",
+        "readers": [
+          "codex",
+          "antigravity",
+          "grok",
+          "opencode"
+        ],
+        "requested_targets": [
+          "agents"
+        ],
+        "lock_id": "target:4ca5b174bd530c5a"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.agents/skills/debugging"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.agents/skills/debugging"
+        }
+      ]
+    },
+    {
+      "id": "act-950a163a7920a57f",
+      "action": "install-link",
+      "status": "dry-run",
+      "skill": {
+        "canonical_id": "beta:debugging",
+        "namespace": "alpha",
+        "name": "debugging",
+        "install_slug": "debugging-beta",
+        "frontmatter_name": "gnit",
+        "description": "Coordinate cross-repository changes with Gnit.",
+        "requested_targets": [
+          "agents"
+        ]
+      },
+      "source_id": "source-002",
+      "target": {
+        "id": "agents",
+        "kind": "shared",
+        "scope": "host",
+        "root": "/skiller/golden/home/.agents/skills",
+        "path": "/skiller/golden/home/.agents/skills/debugging-beta",
+        "readers": [
+          "codex",
+          "antigravity",
+          "grok",
+          "opencode"
+        ],
+        "requested_targets": [
+          "agents"
+        ],
+        "lock_id": "target:4ca5b174bd530c5a"
+      },
+      "mode": {
+        "requested": "link",
+        "effective": "link",
+        "fallback_possible": true
+      },
+      "ownership": {
+        "class": "absent",
+        "path": "/skiller/golden/home/.agents/skills/debugging-beta"
+      },
+      "planned_writes": [
+        {
+          "kind": "link",
+          "path": "/skiller/golden/home/.agents/skills/debugging-beta"
+        }
+      ]
+    }
+  ]
+}

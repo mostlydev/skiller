@@ -90,6 +90,7 @@ type PlanInputs struct {
 	Home         string `json:"home,omitempty"`
 	Project      string `json:"project,omitempty"`
 	Namespace    string `json:"namespace,omitempty"`
+	InstallSlug  string `json:"install_slug,omitempty"`
 	OnConflict   string `json:"on_conflict"`
 }
 

@@ -39,6 +39,7 @@ type ApplyOptions struct {
 	Home             string
 	Project          string
 	Namespace        string
+	InstallSlug      string
 	StateDir         string
 	OnConflict       string
 	LockTimeout      time.Duration
@@ -102,7 +103,7 @@ type preparedPlan struct {
 }
 
 func Plan(opts Options) (contract.Plan, error) {
-	prepared, err := preparePlan(opts)
+	prepared, err := preparePlanWithRename(opts)
 	if err != nil {
 		return contract.Plan{}, err
 	}
@@ -161,11 +162,12 @@ func Apply(ctx context.Context, opts ApplyOptions) (install.Result, error) {
 	if onConflict == "" {
 		onConflict = "block"
 	}
-	prepared, err := preparePlan(Options{
+	prepared, err := preparePlanWithRename(Options{
 		ManifestPath: opts.ManifestPath,
 		Home:         opts.Home,
 		Project:      opts.Project,
 		Namespace:    opts.Namespace,
+		InstallSlug:  opts.InstallSlug,
 		OnConflict:   onConflict,
 	})
 	if err != nil {
@@ -488,6 +490,78 @@ func preparePlan(opts Options) (preparedPlan, error) {
 		ExtraCandidates: extraCandidates,
 		Options:         opts,
 	}, nil
+}
+
+func preparePlanWithRename(opts Options) (preparedPlan, error) {
+	prepared, err := preparePlan(opts)
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	return applyRenameResolutions(prepared)
+}
+
+func applyRenameResolutions(prepared preparedPlan) (preparedPlan, error) {
+	if !hasRenameResolution(prepared.Options) {
+		return prepared, nil
+	}
+	discovery := prepared
+	discovery.Options.OnConflict = "block"
+	world := observePrepared(discovery)
+	plan := buildPreparedPlan(discovery, world)
+	renames := map[string]string{}
+	for _, conflict := range plan.Conflicts {
+		policy, slug := renameResolutionFor(prepared.Options, conflict)
+		if policy != "rename" || strings.TrimSpace(slug) == "" || !renameConflictStatus(conflict.Status) {
+			continue
+		}
+		renames[conflict.DesiredCanonicalID] = strings.TrimSpace(slug)
+	}
+	if len(renames) == 0 {
+		return prepared, nil
+	}
+	out := prepared
+	out.Manifest.Skills = append([]manifest.Skill(nil), prepared.Manifest.Skills...)
+	for i := range out.Manifest.Skills {
+		canonicalID := firstNonEmpty(out.Manifest.Skills[i].CanonicalID, firstNonEmpty(out.Manifest.Namespace, out.Manifest.Owner)+":"+out.Manifest.Skills[i].Name)
+		if slug, ok := renames[canonicalID]; ok {
+			out.Manifest.Skills[i].InstallSlug = slug
+		}
+	}
+	manifestDir := filepath.Dir(prepared.Options.ManifestPath)
+	candidates, err := target.Resolve(out.Manifest, out.Catalog, target.Options{
+		Home:        prepared.Options.Home,
+		Project:     prepared.Options.Project,
+		ManifestDir: manifestDir,
+		EnvHomes:    envHomes(out.Catalog),
+	})
+	if err != nil {
+		return preparedPlan{}, err
+	}
+	out.Candidates = candidates
+	return out, nil
+}
+
+func hasRenameResolution(opts Options) bool {
+	if strings.TrimSpace(opts.OnConflict) == "rename" {
+		return true
+	}
+	for _, resolution := range opts.Resolutions {
+		if strings.TrimSpace(resolution.Policy) == "rename" {
+			return true
+		}
+	}
+	return false
+}
+
+func renameResolutionFor(opts Options, conflict contract.PlanConflict) (string, string) {
+	if resolution, ok := opts.Resolutions[conflict.ID]; ok && strings.TrimSpace(resolution.Policy) != "" {
+		return strings.TrimSpace(resolution.Policy), firstNonEmpty(resolution.InstallSlug, opts.InstallSlug)
+	}
+	return strings.TrimSpace(opts.OnConflict), opts.InstallSlug
+}
+
+func renameConflictStatus(status string) bool {
+	return status == "namespace-collision" || status == "foreign-target"
 }
 
 func observePrepared(prepared preparedPlan) observe.WorldState {

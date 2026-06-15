@@ -146,6 +146,39 @@ func TestApplyExtraIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestApplyRenameResolutionInstallsExplicitSlug(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	manifest := filepath.Join("..", "..", "testdata", "m0", "manifests", "namespace-collision.toml")
+	result, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		OnConflict:   "rename",
+		InstallSlug:  "debugging-beta",
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 2 {
+		t.Fatalf("actions = %#v, want two installs", result.Actions)
+	}
+	if findResultSkill(result, "beta:debugging", filepath.Join(home, ".agents/skills/debugging-beta")) == nil {
+		t.Fatalf("missing renamed beta install action: %#v", result.Actions)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".agents/skills/debugging-beta")); err != nil {
+		t.Fatalf("renamed target missing: %v", err)
+	}
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Installs) != 2 {
+		t.Fatalf("installs = %#v, want two ledger installs", loaded.Ledger.Installs)
+	}
+}
+
 func TestApplySatisfiedByForeignWritesLedgerOnly(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
@@ -727,6 +760,15 @@ func countLedgerInstalls(t *testing.T, stateDir string) int {
 func findResultExtra(result install.Result, id string) *install.ActionResult {
 	for i := range result.Actions {
 		if result.Actions[i].Extra != nil && result.Actions[i].Extra.ID == id {
+			return &result.Actions[i]
+		}
+	}
+	return nil
+}
+
+func findResultSkill(result install.Result, canonicalID, targetPath string) *install.ActionResult {
+	for i := range result.Actions {
+		if result.Actions[i].Skill != nil && result.Actions[i].Skill.CanonicalID == canonicalID && result.Actions[i].Target.Path == targetPath {
 			return &result.Actions[i]
 		}
 	}

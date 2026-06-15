@@ -31,6 +31,7 @@ type Options struct {
 	Home         string
 	Project      string
 	Namespace    string
+	InstallSlug  string
 	OnConflict   string
 	Resolutions  map[string]Resolution
 }
@@ -49,6 +50,11 @@ type builder struct {
 	diagnostics   []contract.Diagnostic
 	actionKeys    map[string]bool
 	desiredByPath map[string]string
+	frontmatter   map[string]frontmatterClaim
+}
+
+type frontmatterClaim struct {
+	canonicalID string
 }
 
 func Build(in Inputs) Plan {
@@ -59,6 +65,7 @@ func Build(in Inputs) Plan {
 		in:            in,
 		actionKeys:    map[string]bool{},
 		desiredByPath: map[string]string{},
+		frontmatter:   map[string]frontmatterClaim{},
 	}
 	for _, candidate := range in.Candidates {
 		b.planCandidate(candidate)
@@ -75,6 +82,7 @@ func Build(in Inputs) Plan {
 			Home:         in.Options.Home,
 			Project:      in.Options.Project,
 			Namespace:    b.namespace(),
+			InstallSlug:  in.Options.InstallSlug,
 			OnConflict:   in.Options.OnConflict,
 		},
 		Sources:     in.Sources,
@@ -101,6 +109,7 @@ func (b *builder) planCandidate(candidate target.Candidate) {
 	mode := b.resolveMode(skill, candidate.Target, snapshot.SourceKind)
 	action := b.planTargetAction(snapshot, planSkill, candidate, mode)
 	action = b.applyDesiredCollision(action, planSkill, candidate.Target)
+	action = b.applyFrontmatterCollision(action, planSkill, candidate.Target)
 	b.addAction(action)
 }
 
@@ -373,7 +382,7 @@ func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.
 	}
 	resolved := conflict
 	if !policyApplies(conflict.Status, policy) {
-		action.Reason = "resolution " + policy + " is not applicable to " + conflict.Status
+		action.Reason = b.inapplicableResolutionReason(conflict.Status, policy)
 		b.addConflict(conflict)
 		return action
 	}
@@ -405,6 +414,23 @@ func (b *builder) resolveConflict(action contract.PlanAction, conflict contract.
 	return action
 }
 
+func (b *builder) inapplicableResolutionReason(status, policy string) string {
+	switch policy {
+	case "rename":
+		if status != "namespace-collision" && status != "foreign-target" && status != "frontmatter-collision" {
+			return "resolution rename is not applicable to " + status
+		}
+		if strings.TrimSpace(b.in.Options.InstallSlug) == "" {
+			return "rename resolution requires --install-slug"
+		}
+		return "renamed target still conflicts after applying install_slug"
+	case "force-replace":
+		return "force-replace resolution requires destructive writer support"
+	default:
+		return "resolution " + policy + " is not applicable to " + status
+	}
+}
+
 func (b *builder) resolutionPolicy(conflict contract.PlanConflict) string {
 	if b.in.Options.Resolutions != nil {
 		if resolution, ok := b.in.Options.Resolutions[conflict.ID]; ok && strings.TrimSpace(resolution.Policy) != "" {
@@ -425,6 +451,8 @@ func applicableConflictModes(status string) []string {
 		modes = []string{"block", "skip", "rename"}
 	case "partial-satisfaction":
 		modes = []string{"block", "skip", "adopt-existing"}
+	case "frontmatter-collision":
+		modes = []string{"block", "skip"}
 	default:
 		modes = allConflictModes
 	}
@@ -442,6 +470,53 @@ func policyApplies(status, policy string) bool {
 	default:
 		return false
 	}
+}
+
+func (b *builder) applyFrontmatterCollision(action contract.PlanAction, skill contract.PlanSkill, targetRef target.Ref) contract.PlanAction {
+	if action.Skill == nil || action.Status == "blocked" || !actionProvidesVisibleSkill(action) {
+		return action
+	}
+	name := strings.TrimSpace(skill.FrontmatterName)
+	if name == "" {
+		return action
+	}
+	for _, reader := range targetReaders(targetRef) {
+		key := reader + "\x00" + name
+		if claim, ok := b.frontmatter[key]; ok && claim.canonicalID != skill.CanonicalID {
+			action.Action = "block-conflict"
+			action.Status = "blocked"
+			action.Reason = "source frontmatter name would still collide for reader " + reader + "; v1 refuses to rewrite SKILL.md"
+			action.PlannedWrites = nil
+			conflict := b.newConflict(targetRef, skill, claim.canonicalID, "frontmatter-collision")
+			conflict.EffectiveName = name
+			return b.resolveConflict(action, conflict, target.Ref{}, nil)
+		}
+	}
+	for _, reader := range targetReaders(targetRef) {
+		key := reader + "\x00" + name
+		if _, ok := b.frontmatter[key]; !ok {
+			b.frontmatter[key] = frontmatterClaim{canonicalID: skill.CanonicalID}
+		}
+	}
+	return action
+}
+
+func actionProvidesVisibleSkill(action contract.PlanAction) bool {
+	switch action.Action {
+	case "install-link", "install-copy", "refresh", "adopt-existing", "satisfied-by-foreign":
+		return true
+	case "no-op":
+		return action.Ownership.Class != "absent"
+	default:
+		return false
+	}
+}
+
+func targetReaders(targetRef target.Ref) []string {
+	if len(targetRef.Readers) > 0 {
+		return targetRef.Readers
+	}
+	return []string{targetRef.ID}
 }
 
 func firstMatchingForeign(observations []contract.ObservedOwnership) *contract.ObservedOwnership {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/mostlydev/skiller/internal/contract"
@@ -313,6 +314,60 @@ func TestInapplicableResolutionRemainsBlocked(t *testing.T) {
 	assertConflict(t, plan, "namespace-collision", "")
 }
 
+func TestRenameResolutionUsesExplicitSlug(t *testing.T) {
+	home := t.TempDir()
+	plan := mustPlanWithOptions(t, "namespace-collision.toml", home, func(opts *Options) {
+		opts.OnConflict = "rename"
+		opts.InstallSlug = "debugging-beta"
+	})
+	assertAction(t, plan, "alpha:debugging", filepath.Join(home, ".agents/skills/debugging"), "install-link")
+	renamed := assertAction(t, plan, "beta:debugging", filepath.Join(home, ".agents/skills/debugging-beta"), "install-link")
+	if renamed.Skill.InstallSlug != "debugging-beta" {
+		t.Fatalf("install_slug = %q, want debugging-beta", renamed.Skill.InstallSlug)
+	}
+	if plan.Inputs.InstallSlug != "debugging-beta" {
+		t.Fatalf("plan input install_slug = %q, want debugging-beta", plan.Inputs.InstallSlug)
+	}
+	if len(plan.Conflicts) != 0 {
+		t.Fatalf("conflicts = %#v, want none after rename", plan.Conflicts)
+	}
+}
+
+func TestRenameResolutionRequiresInstallSlug(t *testing.T) {
+	home := t.TempDir()
+	plan := mustPlanWithOptions(t, "namespace-collision.toml", home, func(opts *Options) {
+		opts.OnConflict = "rename"
+	})
+	action := assertAction(t, plan, "beta:debugging", filepath.Join(home, ".agents/skills/debugging"), "block-conflict")
+	if action.Reason != "rename resolution requires --install-slug" {
+		t.Fatalf("reason = %q", action.Reason)
+	}
+	assertConflict(t, plan, "namespace-collision", "")
+}
+
+func TestRenameResolutionRefusesFrontmatterCollision(t *testing.T) {
+	home := t.TempDir()
+	source := fixturePath(t, "sources/talking-stick")
+	manifest := writeTwoSkillManifest(t, source, source)
+
+	plan, err := Build(Options{
+		ManifestPath: manifest,
+		Home:         home,
+		OnConflict:   "rename",
+		InstallSlug:  "talking-stick-beta",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	SortPlan(&plan)
+	action := assertAction(t, plan, "beta:talking-stick", filepath.Join(home, ".agents/skills/talking-stick-beta"), "block-conflict")
+	if action.Reason != "renamed target still conflicts after applying install_slug" {
+		t.Fatalf("reason = %q", action.Reason)
+	}
+	conflict := assertConflict(t, plan, "frontmatter-collision", "")
+	assertStrings(t, conflict.SafeChoices, []string{"block", "skip"})
+}
+
 func mustPlan(t *testing.T, manifestName, home string) contract.Plan {
 	t.Helper()
 	return mustPlanWithOptions(t, manifestName, home, nil)
@@ -445,4 +500,32 @@ func writeMarker(t *testing.T, dir, owner, canonicalID, installedDigest string) 
 	if err := os.WriteFile(filepath.Join(dir, ".skiller-install.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeTwoSkillManifest(t *testing.T, firstSource, secondSource string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "skiller.toml")
+	data := "schema = \"skiller-install.v1\"\n" +
+		"owner = \"rename-fixture\"\n" +
+		"namespace = \"alpha\"\n" +
+		"default_mode = \"link\"\n\n" +
+		"[[skills]]\n" +
+		"name = \"talking-stick\"\n" +
+		"canonical_id = \"alpha:talking-stick\"\n" +
+		"install_slug = \"talking-stick\"\n" +
+		"source = " + strconv.Quote(firstSource) + "\n" +
+		"targets = [\"agents\"]\n" +
+		"mode = \"link\"\n\n" +
+		"[[skills]]\n" +
+		"name = \"talking-stick\"\n" +
+		"canonical_id = \"beta:talking-stick\"\n" +
+		"install_slug = \"talking-stick\"\n" +
+		"source = " + strconv.Quote(secondSource) + "\n" +
+		"targets = [\"agents\"]\n" +
+		"mode = \"link\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
