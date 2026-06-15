@@ -189,6 +189,50 @@ func TestApplyAdoptExistingWritesLedgerOnly(t *testing.T) {
 	}
 }
 
+func TestApplyRefreshesStaleLegacyAndRemovesLegacyMarker(t *testing.T) {
+	home := t.TempDir()
+	stateDir := t.TempDir()
+	src := fixtureSource(t, "gnit")
+	target := filepath.Join(home, ".agents", "skills", "gnit")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: gnit\n---\n\nold\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyMarker := filepath.Join(target, ".gnit-skill-managed")
+	if err := os.WriteFile(legacyMarker, []byte("gnit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := writeSingleSkillManifest(t, "gnit", "mostlydev:gnit", "gnit", src)
+
+	result, err := Apply(context.Background(), ApplyOptions{
+		ManifestPath: manifest,
+		Home:         home,
+		StateDir:     stateDir,
+		LockTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 || result.Actions[0].Action != "refresh" || result.Actions[0].Status != "updated" {
+		t.Fatalf("result actions = %#v, want one updated refresh", result.Actions)
+	}
+	if _, err := os.Stat(legacyMarker); !os.IsNotExist(err) {
+		t.Fatalf("legacy marker should be removed after materialized ownership, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".skiller-install.json")); err != nil {
+		t.Fatalf("skiller marker should be written after legacy refresh: %v", err)
+	}
+	loaded, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Ledger.Installs) != 1 || loaded.Ledger.Installs[0].LegacyAdapter != "gnit" {
+		t.Fatalf("installs = %#v, want legacy adapter lineage retained", loaded.Ledger.Installs)
+	}
+}
+
 func TestRepairRebuildsSatisfiedByForeignLedger(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
@@ -456,6 +500,38 @@ func TestCleanupDuplicatesRemovesOnlyManagedSymlinks(t *testing.T) {
 	}
 	if _, err := os.Lstat(foreignDuplicate); err != nil {
 		t.Fatalf("foreign symlink should be preserved: %v", err)
+	}
+}
+
+func TestM2RepresentativeManifestsApplyWithoutBlockedActions(t *testing.T) {
+	cases := []struct {
+		name     string
+		manifest string
+	}{
+		{name: "talking-stick", manifest: "talking-stick.toml"},
+		{name: "gnit", manifest: "gnit.toml"},
+		{name: "our-ai", manifest: "our-self.toml"},
+		{name: "clawdapus-runtime", manifest: "clawdapus-runtime.toml"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := Apply(context.Background(), ApplyOptions{
+				ManifestPath: filepath.Join("..", "..", "testdata", "m0", "manifests", tc.manifest),
+				Home:         t.TempDir(),
+				Project:      t.TempDir(),
+				StateDir:     t.TempDir(),
+				LockTimeout:  time.Second,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertApplyResultSchema(t, result)
+			for _, action := range result.Actions {
+				if action.Status == "failed" || action.Status == "blocked" || action.Status == "partially-satisfied" {
+					t.Fatalf("unexpected blocked/failed action: %#v", action)
+				}
+			}
+		})
 	}
 }
 
