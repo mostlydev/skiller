@@ -36,6 +36,29 @@ func TestTalkingStickPlanRepresentsSharedClaudeAndExtra(t *testing.T) {
 	}
 }
 
+func TestExistingExtraTargetIsObserved(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".grok/hooks/talking-stick-session.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte(`{"existing":true}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := mustPlan(t, "talking-stick.toml", home)
+	action := findExtraAction(plan, "grok-session-hook")
+	if action == nil {
+		t.Fatal("missing grok-session-hook install-extra action")
+	}
+	if action.Ownership.Class != "foreign-unmanaged" {
+		t.Fatalf("extra ownership class = %q, want foreign-unmanaged; ownership=%#v", action.Ownership.Class, action.Ownership)
+	}
+	if action.Ownership.Path != target {
+		t.Fatalf("extra ownership path = %q, want %q", action.Ownership.Path, target)
+	}
+}
+
 func TestDigestMatchingDirectInstallIsSatisfiedByForeign(t *testing.T) {
 	home := t.TempDir()
 	src := fixturePath(t, "sources/talking-stick")
