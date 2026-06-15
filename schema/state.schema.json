@@ -96,7 +96,10 @@
         "target_path": { "type": "string" },
         "mode": { "enum": ["link", "copy"] },
         "scope": { "enum": ["host", "runtime"] },
-        "marker_path": { "type": "string" },
+        "marker_path": {
+          "description": "Observed ownership marker path for this install. For skiller-owned copies this is .skiller-install.json; for ledger-only adoption it may be a legacy or foreign marker; empty means no marker was observed or written.",
+          "type": "string"
+        },
         "installed_digest_at_install": { "type": "string" },
         "source_digest_at_install": { "type": "string" },
         "status": { "$ref": "source-snapshot.schema.json#/$defs/result_status" },

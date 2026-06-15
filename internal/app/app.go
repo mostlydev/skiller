@@ -329,12 +329,12 @@ func applyLedgerUpdates(ledger *state.Ledger, plan contract.Plan, result install
 			if action.Extra != nil {
 				upsertExtra(ledger, action)
 			}
-		case "skipped":
+		case "skipped", "satisfied-by-foreign":
 			if action.Skill != nil && isLedgerOnlyAdoption(action.Action) {
 				upsertSkill(ledger, *action.Skill)
 				upsertInstall(ledger, action, planned, sourcesByID)
 			}
-		case "blocked":
+		case "blocked", "partially-satisfied":
 			for _, conflict := range result.Conflicts {
 				upsertConflict(ledger, conflict)
 			}

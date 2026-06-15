@@ -154,7 +154,7 @@ func countFailedBlocked(result install.Result) (failed, blocked int) {
 		switch action.Status {
 		case "failed":
 			failed++
-		case "blocked":
+		case "blocked", "partially-satisfied":
 			blocked++
 		}
 	}

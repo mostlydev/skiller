@@ -52,7 +52,7 @@ func Apply(plan contract.Plan, opts Options) (Result, error) {
 	for _, action := range plan.Actions {
 		actionResult := applyAction(action, sources, plan, opts)
 		result.Actions = append(result.Actions, actionResult)
-		if actionResult.Status == "blocked" {
+		if isBlockedStatus(actionResult.Status) {
 			for _, conflict := range plan.Conflicts {
 				if conflict.TargetID == action.Target.ID && conflict.EffectiveName == effectiveName(action) {
 					result.Conflicts = append(result.Conflicts, conflict)
@@ -74,11 +74,19 @@ func applyAction(action contract.PlanAction, sources map[string]contract.SourceS
 		EffectiveMode: action.Mode.Effective,
 	}
 	switch action.Action {
-	case "block-conflict", "partially-satisfied":
+	case "block-conflict":
 		out.Status = "blocked"
 		out.Reason = action.Reason
 		return out
-	case "no-op", "adopt-existing", "satisfied-by-foreign":
+	case "partially-satisfied":
+		out.Status = "partially-satisfied"
+		out.Reason = action.Reason
+		return out
+	case "satisfied-by-foreign":
+		out.Status = "satisfied-by-foreign"
+		out.Reason = action.Reason
+		return out
+	case "no-op", "adopt-existing":
 		out.Status = "skipped"
 		out.Reason = action.Reason
 		return out
@@ -240,6 +248,10 @@ func failed(result ActionResult, message string) ActionResult {
 	result.Status = "failed"
 	result.Error = message
 	return result
+}
+
+func isBlockedStatus(status string) bool {
+	return status == "blocked" || status == "partially-satisfied"
 }
 
 func writesFor(action contract.PlanAction, effective string) []contract.PlannedWrite {

@@ -31,13 +31,7 @@ func TestApplyCopyPipelineWritesTargetAndState(t *testing.T) {
 	if len(result.Actions) != 1 || result.Actions[0].Status != "installed" {
 		t.Fatalf("result actions = %#v", result.Actions)
 	}
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := schemajson.Validate("apply-result.schema.json", resultJSON); err != nil {
-		t.Fatalf("apply result schema: %v\n%s", err, resultJSON)
-	}
+	assertApplyResultSchema(t, result)
 	target := filepath.Join(project, ".claw-skills", "desk-manager", "skills", "clawdapus-cli")
 	if _, err := os.Stat(filepath.Join(target, "SKILL.md")); err != nil {
 		t.Fatalf("target skill missing: %v", err)
@@ -132,9 +126,10 @@ func TestApplySatisfiedByForeignWritesLedgerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Actions) != 1 || result.Actions[0].Action != "satisfied-by-foreign" || result.Actions[0].Status != "skipped" {
-		t.Fatalf("result actions = %#v, want one skipped satisfied-by-foreign", result.Actions)
+	if len(result.Actions) != 1 || result.Actions[0].Action != "satisfied-by-foreign" || result.Actions[0].Status != "satisfied-by-foreign" {
+		t.Fatalf("result actions = %#v, want one satisfied-by-foreign result", result.Actions)
 	}
+	assertApplyResultSchema(t, result)
 	if _, err := os.Stat(filepath.Join(target, ".skiller-install.json")); !os.IsNotExist(err) {
 		t.Fatalf("satisfied-by-foreign must not write skiller marker, stat err=%v", err)
 	}
@@ -191,6 +186,17 @@ func TestApplyAdoptExistingWritesLedgerOnly(t *testing.T) {
 	install := loaded.Ledger.Installs[0]
 	if install.TargetPath != target || install.Status != "installed" || install.LegacyAdapter != "gnit" || install.MarkerPath != legacyMarker {
 		t.Fatalf("install = %#v, want adopted legacy install at %q with marker %q", install, target, legacyMarker)
+	}
+}
+
+func assertApplyResultSchema(t *testing.T, result any) {
+	t.Helper()
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schemajson.Validate("apply-result.schema.json", resultJSON); err != nil {
+		t.Fatalf("apply result schema: %v\n%s", err, resultJSON)
 	}
 }
 
